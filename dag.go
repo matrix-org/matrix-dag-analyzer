@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 )
 
@@ -40,6 +41,7 @@ type RoomDAG struct {
 	eventsByType map[EventType][]*Event
 
 	createEvent *eventNode
+	roomID      *string
 }
 
 func NewRoomDAG() RoomDAG {
@@ -47,6 +49,7 @@ func NewRoomDAG() RoomDAG {
 		eventsByID:   make(map[EventID]*Event),
 		eventsByType: make(map[EventType][]*Event),
 		createEvent:  nil,
+		roomID:       nil,
 	}
 }
 
@@ -86,6 +89,13 @@ func (d *RoomDAG) addEvent(event Event) error {
 	if _, ok := d.eventsByID[event.EventID]; ok {
 		return errors.New("Duplicate event ID detected in file")
 	}
+	if d.roomID != nil && *d.roomID != event.RoomID {
+		return fmt.Errorf("Received event with different room ID. Expected: %s, Got: %s", *d.roomID, event.RoomID)
+	}
+	if d.roomID == nil {
+		d.roomID = &event.RoomID
+	}
+
 	d.eventsByID[event.EventID] = &event
 
 	if events, ok := d.eventsByType[event.Type]; ok {
