@@ -2,7 +2,10 @@ module github.com/matrix-org/matrix-dag-analyzer
 
 go 1.19
 
-require github.com/rs/zerolog v1.29.0
+require (
+	github.com/rs/zerolog v1.29.0
+	github.com/yourbasic/graph v0.0.0-20210606180040-8ecfec1c2869
+)
 
 require (
 	github.com/mattn/go-colorable v0.1.13 // indirect

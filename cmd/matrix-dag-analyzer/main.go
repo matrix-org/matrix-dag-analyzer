@@ -50,8 +50,16 @@ func main() {
 	}
 
 	log.Info().
-		Int("event_count", dag.TotalEventCount()).
+		Int("events_in_file", dag.EventsInFile()).
+		Int("events_referenced", dag.TotalEvents()).
 		Int("create_count", dag.EventCountByType(analyzer.EVENT_TYPE_CREATE)).
 		Msg("Successfully parsed dag file")
+	if dag.TotalEvents() != dag.EventsInFile() {
+		log.Warn().
+			Int("events_in_file", dag.EventsInFile()).
+			Int("events_referenced", dag.TotalEvents()).
+			Int("delta", dag.TotalEvents()-dag.EventsInFile()).
+			Msg("The number of events in the file does not match the number of events referenced in the file")
+	}
 	dag.PrintEventCounts()
 }
