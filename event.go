@@ -15,30 +15,40 @@
 package analyzer
 
 const EVENT_TYPE_CREATE = "m.room.create"
-const EVENT_TYPE_JOIN_RULE = "m.room.join_rule"
+const EVENT_TYPE_JOIN_RULES = "m.room.join_rules"
 const EVENT_TYPE_MEMBER = "m.room.member"
 const EVENT_TYPE_POWER_LEVELS = "m.room.power_levels"
 const EVENT_TYPE_THIRD_PARTY_INVITE = "m.room.third_party_invite"
+const EVENT_TYPE_SERVER_ACL = "m.room.server_acl"
+
+var AuthEventTypes = map[string]struct{}{
+	EVENT_TYPE_CREATE:             {},
+	EVENT_TYPE_JOIN_RULES:         {},
+	EVENT_TYPE_MEMBER:             {},
+	EVENT_TYPE_POWER_LEVELS:       {},
+	EVENT_TYPE_THIRD_PARTY_INVITE: {},
+}
 
 type EventID = string
 
 type EventType = string
 
 type Event struct {
-	EventID    string      `json:"event_id"`
-	AuthEvents interface{} `json:"auth_events"`
-	Content    RawJSON     `json:"content"`
-	Depth      int64       `json:"depth"`
-	Hashes     RawJSON     `json:"hashes"`
-	OriginTS   int64       `json:"origin_server_ts"`
-	PrevEvents interface{} `json:"prev_events"`
-	Redacts    *string     `json:"redacts,omitempty"`
-	RoomID     string      `json:"room_id"`
-	Sender     string      `json:"sender"`
-	Signatures RawJSON     `json:"signatures,omitempty"`
-	StateKey   *string     `json:"state_key,omitempty"`
-	Type       string      `json:"type"`
-	Unsigned   RawJSON     `json:"unsigned,omitempty"`
+	EventID     string   `json:"_event_id"`
+	RoomVersion string   `json:"_room_version"`
+	AuthEvents  []string `json:"auth_events"`
+	Content     RawJSON  `json:"content"`
+	Depth       int64    `json:"depth"`
+	Hashes      RawJSON  `json:"hashes"`
+	OriginTS    int64    `json:"origin_server_ts"`
+	PrevEvents  []string `json:"prev_events"`
+	Redacts     *string  `json:"redacts,omitempty"`
+	RoomID      string   `json:"room_id"`
+	Sender      string   `json:"sender"`
+	Signatures  RawJSON  `json:"signatures,omitempty"`
+	StateKey    *string  `json:"state_key,omitempty"`
+	Type        string   `json:"type"`
+	Unsigned    RawJSON  `json:"unsigned,omitempty"`
 }
 
 type RawJSON []byte

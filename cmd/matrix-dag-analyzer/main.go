@@ -53,4 +53,5 @@ func main() {
 		Int("event_count", dag.TotalEventCount()).
 		Int("create_count", dag.EventCountByType(analyzer.EVENT_TYPE_CREATE)).
 		Msg("parsed dag file")
+	dag.PrintEventCounts()
 }

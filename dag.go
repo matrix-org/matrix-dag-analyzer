@@ -17,28 +17,30 @@ package analyzer
 import (
 	"bufio"
 	"encoding/json"
-	"errors"
 	"fmt"
+	"math"
 	"os"
+
+	"github.com/rs/zerolog/log"
 )
 
 type eventNode struct {
 	event         *Event
-	stateChildren map[EventID]*Event
-	authChildren  map[EventID]*Event
+	stateChildren map[EventID]*eventNode
+	authChildren  map[EventID]*eventNode
 }
 
 func newEventNode(event *Event) eventNode {
 	return eventNode{
 		event:         event,
-		stateChildren: make(map[EventID]*Event),
-		authChildren:  make(map[EventID]*Event),
+		stateChildren: make(map[EventID]*eventNode),
+		authChildren:  make(map[EventID]*eventNode),
 	}
 }
 
 type RoomDAG struct {
-	eventsByID   map[EventID]*Event
-	eventsByType map[EventType][]*Event
+	eventsByID   map[EventID]*eventNode
+	eventsByType map[EventType][]*eventNode
 
 	createEvent *eventNode
 	roomID      *string
@@ -46,8 +48,8 @@ type RoomDAG struct {
 
 func NewRoomDAG() RoomDAG {
 	return RoomDAG{
-		eventsByID:   make(map[EventID]*Event),
-		eventsByType: make(map[EventType][]*Event),
+		eventsByID:   make(map[EventID]*eventNode),
+		eventsByType: make(map[EventType][]*eventNode),
 		createEvent:  nil,
 		roomID:       nil,
 	}
@@ -61,16 +63,18 @@ func ParseDAGFromFile(filename string) (*RoomDAG, error) {
 
 	dag := NewRoomDAG()
 	scanner := bufio.NewScanner(file)
+	lineNumber := 0
 	for scanner.Scan() {
+		lineNumber = lineNumber + 1
 		var event Event
 		err := json.Unmarshal([]byte(scanner.Text()), &event)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("Line %d: %w", lineNumber, err)
 		}
 
 		err = dag.addEvent(event)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("Line %d: %w", lineNumber, err)
 		}
 	}
 
@@ -85,26 +89,127 @@ func (d *RoomDAG) EventCountByType(eventType string) int {
 	return len(d.eventsByType[eventType])
 }
 
-func (d *RoomDAG) addEvent(event Event) error {
-	if _, ok := d.eventsByID[event.EventID]; ok {
-		return errors.New("Duplicate event ID detected in file")
+func (d *RoomDAG) PrintEventCounts() {
+	log.Info().Msg("Total Event Counts:")
+	authEventCount := 0
+	for eventType, events := range d.eventsByType {
+		log.Info().Msg(fmt.Sprintf("%s: %d", eventType, len(events)))
+		if _, ok := AuthEventTypes[eventType]; ok {
+			authEventCount += len(events)
+		}
 	}
-	if d.roomID != nil && *d.roomID != event.RoomID {
-		return fmt.Errorf("Received event with different room ID. Expected: %s, Got: %s", *d.roomID, event.RoomID)
+	log.Info().Msg(fmt.Sprintf("Auth Events: %d", authEventCount))
+
+	stateEventCount := 0
+	for _, event := range d.eventsByID {
+		if event.event != nil && event.event.StateKey != nil {
+			if event.event.Type == EVENT_TYPE_MEMBER && *event.event.StateKey == "" {
+				log.Warn().Msg(fmt.Sprintf("Event: %s of type %s has a zero-length state key", event.event.EventID, event.event.Type))
+			}
+			stateEventCount += 1
+		}
+	}
+	log.Info().Msg(fmt.Sprintf("State Events: %d", stateEventCount))
+
+	maxAuthDepth := calculateAuthDAGSize(d.createEvent)
+	log.Info().Msg(fmt.Sprintf("(Since Create): Auth DAG Size: %d, Max Depth: %d", authChainSize, maxAuthDepth))
+	maxStateDepth := calculateStateDAGSize(d.createEvent)
+	log.Info().Msg(fmt.Sprintf("(Since Create): State DAG Size: %d, Max Depth: %d", stateChainSize, maxStateDepth))
+}
+
+var authChainSize = 0
+var stateChainSize = 0
+var authSeenEvents = map[EventID]struct{}{}
+var stateSeenEvents = map[EventID]struct{}{}
+
+func calculateAuthDAGSize(event *eventNode) int {
+	maxDepth := 0
+	if _, ok := authSeenEvents[event.event.EventID]; !ok {
+		authChainSize = authChainSize + 1
+	}
+	authSeenEvents[event.event.EventID] = struct{}{}
+	for _, child := range event.authChildren {
+		maxDepth = int(math.Max(float64(maxDepth), float64(calculateAuthDAGSize(child))))
+	}
+
+	return maxDepth + 1
+}
+
+func calculateStateDAGSize(event *eventNode) int {
+	maxDepth := 0
+	if _, ok := stateSeenEvents[event.event.EventID]; !ok {
+		stateChainSize = stateChainSize + 1
+	}
+	stateSeenEvents[event.event.EventID] = struct{}{}
+	for _, child := range event.stateChildren {
+		maxDepth = int(math.Max(float64(maxDepth), float64(calculateStateDAGSize(child))))
+	}
+
+	return maxDepth + 1
+}
+
+func (d *RoomDAG) addEvent(newEvent Event) error {
+	if foundEvent, ok := d.eventsByID[newEvent.EventID]; ok && foundEvent.event != nil {
+		return fmt.Errorf("Duplicate event ID detected in file: %s", newEvent.EventID)
+	}
+	if d.roomID != nil && *d.roomID != newEvent.RoomID {
+		return fmt.Errorf("Received event with different room ID. Expected: %s, Got: %s", *d.roomID, newEvent.RoomID)
 	}
 	if d.roomID == nil {
-		d.roomID = &event.RoomID
+		d.roomID = &newEvent.RoomID
 	}
 
-	d.eventsByID[event.EventID] = &event
+	if _, ok := d.eventsByID[newEvent.EventID]; !ok {
+		newNode := newEventNode(&newEvent)
+		d.eventsByID[newEvent.EventID] = &newNode
+	}
+	d.eventsByID[newEvent.EventID].event = &newEvent
 
-	if events, ok := d.eventsByType[event.Type]; ok {
-		d.eventsByType[event.Type] = append(events, &event)
+	if newEvent.Type == EVENT_TYPE_CREATE {
+		d.createEvent = d.eventsByID[newEvent.EventID]
+	}
+
+	if events, ok := d.eventsByType[newEvent.Type]; ok {
+		d.eventsByType[newEvent.Type] = append(events, d.eventsByID[newEvent.EventID])
 	} else {
-		d.eventsByType[event.Type] = []*Event{&event}
+		d.eventsByType[newEvent.Type] = []*eventNode{d.eventsByID[newEvent.EventID]}
 	}
 
-	// TODO: make DAG
+	for _, authEvent := range newEvent.AuthEvents {
+		if _, ok := d.eventsByID[authEvent]; !ok {
+			// NOTE: add a placeholder event
+			newNode := newEventNode(nil)
+			d.eventsByID[authEvent] = &newNode
+		}
+		event := d.eventsByID[authEvent]
+
+		if _, ok := AuthEventTypes[newEvent.Type]; ok {
+			if _, ok := event.authChildren[newEvent.EventID]; !ok {
+				event.authChildren[newEvent.EventID] = d.eventsByID[newEvent.EventID]
+			}
+		}
+
+		if event.event != nil && event.event.StateKey != nil {
+			if _, ok := event.stateChildren[newEvent.EventID]; !ok {
+				event.stateChildren[newEvent.EventID] = d.eventsByID[newEvent.EventID]
+			}
+		}
+	}
+
+	for _, prevEvent := range newEvent.PrevEvents {
+		if _, ok := d.eventsByID[prevEvent]; !ok {
+			// NOTE: add a placeholder event
+			newNode := newEventNode(nil)
+			d.eventsByID[prevEvent] = &newNode
+		}
+		event := d.eventsByID[prevEvent]
+
+		if event.event != nil && event.event.StateKey != nil {
+			if _, ok := event.stateChildren[newEvent.EventID]; !ok {
+				event.stateChildren[newEvent.EventID] = d.eventsByID[newEvent.EventID]
+			}
+		}
+	}
 
 	return nil
 }
