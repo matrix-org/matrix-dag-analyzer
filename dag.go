@@ -51,6 +51,10 @@ func newEventNode(event *Event, index int) eventNode {
 	}
 }
 
+func (e *eventNode) isStateEvent() bool {
+	return e.event != nil && e.event.StateKey != nil
+}
+
 type RoomDAG struct {
 	eventsByID   map[EventID]*eventNode
 	eventsByType map[EventType][]*eventNode
@@ -167,8 +171,6 @@ func (d *RoomDAG) PrintEventCounts() {
 		log.Warn().Int("parentless_auth_events", parentlessAuthEvents).Msg("There should only be one auth event without parents")
 	}
 
-	log.Info().Msg(fmt.Sprintf("Forward Extremities: %d", forwardExtremities))
-
 	gatherAuthChainMetrics := true
 	if !graph.Acyclic(authChainGraph) {
 		log.Error().Msg("Auth chain graph is not acyclic, not calculating metrics")
@@ -179,7 +181,7 @@ func (d *RoomDAG) PrintEventCounts() {
 	}
 
 	if gatherAuthChainMetrics {
-		maxAuthChainDepth := calculateAuthChainSize(d.createEvent)
+		maxAuthChainDepth := traverseChildAuthChainNodesOf(d.createEvent)
 		log.Info().Msg(fmt.Sprintf("(From Create Event): Auth Chain Size: %d, Max Depth: %d", authChainSize, maxAuthChainDepth))
 		if authEventCount != authChainSize {
 			log.Warn().Msg(fmt.Sprintf("Auth Chain size %d is less than the total amount of auth events (%d)", authChainSize, authEventCount))
@@ -200,13 +202,27 @@ func (d *RoomDAG) PrintEventCounts() {
 		//statsTranspose := graph.Check(graph.Transpose(roomGraph))
 		//log.Info().Msg(fmt.Sprintf("Dangling parents: %d", statsTranspose.Isolated))
 		//log.Info().Msg(fmt.Sprintf("Dangling children: %d", stats.Isolated))
-
-		maxRoomDepth := calculateRoomDAGSize(d.createEvent.event.EventID, d.createEvent)
+		maxRoomDepth := traverseChildPrevNodesOf(d.createEvent.event.EventID, d.createEvent)
 		log.Info().Msg(fmt.Sprintf("(From Create Event): Room DAG Size: %d, Max Depth: %d", roomDAGSize, maxRoomDepth))
 		totalEventCount := d.EventsInFile()
 		if totalEventCount != roomDAGSize {
 			log.Warn().Int("missing_events", totalEventCount-roomDAGSize).Msg(fmt.Sprintf("Room DAG size (%d) is less than the amount of events in the file (%d)", roomDAGSize, totalEventCount))
 		}
+
+		stateDAGForwardExtremities := 0
+		for _, node := range d.eventsByID {
+			if node.isStateEvent() && len(node.stateChildren) == 0 {
+				stateDAGForwardExtremities = stateDAGForwardExtremities + 1
+			}
+		}
+		log.Info().Msg(fmt.Sprintf("Forward Extremities (Room): %d", forwardExtremities))
+		log.Info().Msg(fmt.Sprintf("Forward Extremities (State DAG): %d", stateDAGForwardExtremities))
+
+		// TODO: Figure out why state DAG metrics aren't deterministic
+		maxStateDepth := traverseStateDAG(d.createEvent)
+		log.Info().Msg(fmt.Sprintf("(From Create Event): State DAG Size: %d, Max Depth: %d, Forks: %d", stateDAGSize, maxStateDepth, stateDAGForks))
+
+		// TODO: Create the auth DAG subset
 	}
 
 	// NOTE: uncomment this to see those events that aren't found when walking the roomDAG from the create event
@@ -223,47 +239,67 @@ func (d *RoomDAG) PrintEventCounts() {
 	log.Info().Msg("***************************************************************")
 }
 
+var stateDAGSize = 0
+var stateDAGForks = 0
+var stateDAGSeenEvents = map[EventID]struct{}{}
+
+func traverseStateDAG(event *eventNode) int {
+	maxDepth := 0
+	if _, ok := stateDAGSeenEvents[event.event.EventID]; !ok {
+		stateDAGSize = stateDAGSize + 1
+		if len(event.stateChildren) > 1 {
+			stateDAGForks = stateDAGForks + 1
+		}
+	}
+	stateDAGSeenEvents[event.event.EventID] = struct{}{}
+	for _, child := range event.stateChildren {
+		maxDepth = int(math.Max(float64(maxDepth), float64(traverseStateDAG(child))))
+	}
+
+	return maxDepth + 1
+}
+
 var authChainSize = 0
 var authChainSeenEvents = map[EventID]struct{}{}
 
-func calculateAuthChainSize(event *eventNode) int {
+func traverseChildAuthChainNodesOf(event *eventNode) int {
 	maxDepth := 0
 	if _, ok := authChainSeenEvents[event.event.EventID]; !ok {
 		authChainSize = authChainSize + 1
 	}
 	authChainSeenEvents[event.event.EventID] = struct{}{}
 	for _, child := range event.authChainChildren {
-		maxDepth = int(math.Max(float64(maxDepth), float64(calculateAuthChainSize(child))))
+		maxDepth = int(math.Max(float64(maxDepth), float64(traverseChildAuthChainNodesOf(child))))
 	}
 
 	return maxDepth + 1
 }
 
 type roomChain struct {
-	roomChain []EventID
+	roomChain []*eventNode
 }
 
 func (r *roomChain) contains(eventID EventID) bool {
 	for _, id := range r.roomChain {
-		if eventID == id {
+		if eventID == id.event.EventID {
 			return true
 		}
 	}
 	return false
 }
 
-func (r *roomChain) push(eventID EventID) {
-	r.roomChain = append(r.roomChain, eventID)
+func (r *roomChain) push(event *eventNode) {
+	r.roomChain = append(r.roomChain, event)
 }
 
 func (r *roomChain) pop() {
 	r.roomChain = r.roomChain[:len(r.roomChain)-1]
 }
 
-func (r *roomChain) prevInstanceOf(eventID EventID) []EventID {
+func (r *roomChain) getEventsFromPrevInstanceOf(eventID EventID) []*eventNode {
 	index := 0
 	for i, id := range r.roomChain {
-		if eventID == id {
+		if eventID == id.event.EventID {
 			index = i
 			break
 		}
@@ -272,14 +308,38 @@ func (r *roomChain) prevInstanceOf(eventID EventID) []EventID {
 	return r.roomChain[index:]
 }
 
+func (r *roomChain) getLastStateEvent() *eventNode {
+	for i := len(r.roomChain) - 1; i >= 0; i-- {
+		if r.roomChain[i].isStateEvent() {
+			return r.roomChain[i]
+		}
+	}
+	log.Warn().Msg("Cannot find a previous state event...")
+	return nil
+}
+
 var chain = roomChain{
-	roomChain: []EventID{},
+	roomChain: []*eventNode{},
 }
 
 var roomDAGSize = 0
 var roomDAGSeenEvents = map[EventID]struct{}{}
 
-func calculateRoomDAGSize(eventID EventID, event *eventNode) int {
+func traverseChildPrevNodesOf(eventID EventID, event *eventNode) int {
+	if event.isStateEvent() {
+		lastStateEvent := chain.getLastStateEvent()
+		if lastStateEvent != nil {
+			if _, ok := lastStateEvent.stateChildren[eventID]; !ok {
+				lastStateEvent.stateChildren[eventID] = event
+			}
+		} else {
+			if event.event.Type != EVENT_TYPE_CREATE {
+				// NOTE: nil state event should only happen for the initial create event
+				panic(1)
+			}
+		}
+	}
+
 	maxDepth := 0
 	if _, ok := roomDAGSeenEvents[eventID]; !ok {
 		roomDAGSize = roomDAGSize + 1
@@ -287,16 +347,16 @@ func calculateRoomDAGSize(eventID EventID, event *eventNode) int {
 	} else {
 		if chain.contains(eventID) {
 			log.Error().
-				Str("loop", fmt.Sprintf("%v", append(chain.prevInstanceOf(eventID), eventID))).
+				Str("loop", fmt.Sprintf("%v", append(chain.getEventsFromPrevInstanceOf(eventID), event))).
 				Msg("Loop Detected!")
 		}
 		return maxDepth
 	}
 
-	chain.push(eventID)
+	chain.push(event)
 
 	for childID, child := range event.roomChildren {
-		maxDepth = int(math.Max(float64(maxDepth), float64(calculateRoomDAGSize(childID, child))))
+		maxDepth = int(math.Max(float64(maxDepth), float64(traverseChildPrevNodesOf(childID, child))))
 	}
 
 	chain.pop()
@@ -375,9 +435,6 @@ func (d *RoomDAG) addEvent(newEvent Event) error {
 			newNode.roomParents[prevEventID] = prevNode
 		}
 	}
-
-	// TODO: Create the state DAG subset
-	// TODO: Create the auth DAG subset
 
 	return nil
 }
