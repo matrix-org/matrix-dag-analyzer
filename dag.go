@@ -25,7 +25,9 @@ import (
 )
 
 type eventNode struct {
-	event             *Event
+	event *Event
+
+	roomChildren      map[EventID]*eventNode
 	stateChildren     map[EventID]*eventNode
 	authChainChildren map[EventID]*eventNode
 }
@@ -33,6 +35,7 @@ type eventNode struct {
 func newEventNode(event *Event) eventNode {
 	return eventNode{
 		event:             event,
+		roomChildren:      make(map[EventID]*eventNode),
 		stateChildren:     make(map[EventID]*eventNode),
 		authChainChildren: make(map[EventID]*eventNode),
 	}
@@ -113,16 +116,22 @@ func (d *RoomDAG) PrintEventCounts() {
 
 	maxAuthChainDepth := calculateAuthChainSize(d.createEvent)
 	log.Info().Msg(fmt.Sprintf("(From Create Event): Auth Chain Size: %d, Max Depth: %d", authChainSize, maxAuthChainDepth))
+	if authEventCount != authChainSize {
+		log.Warn().Msg(fmt.Sprintf("Auth Chain size %d is less than the total amount of auth events (%d)", authChainSize, authEventCount))
+	}
 
-	// TODO: This is wrong
-	//maxStateDepth := calculateStateDAGSize(d.createEvent)
-	//log.Info().Msg(fmt.Sprintf("(From Create Event): State DAG Size: %d, Max Depth: %d", stateChainSize, maxStateDepth))
+	maxRoomDepth := calculateRoomDAGSize(d.createEvent)
+	log.Info().Msg(fmt.Sprintf("(From Create Event): Room DAG Size: %d, Max Depth: %d", roomDAGSize, maxRoomDepth))
+	totalEventCount := d.TotalEventCount()
+	if totalEventCount != roomDAGSize {
+		log.Warn().Int("missing_events", totalEventCount-roomDAGSize).Msg(fmt.Sprintf("Room DAG size (%d) is less than the total amount of room events (%d)", roomDAGSize, totalEventCount))
+	}
 }
 
 var authChainSize = 0
-var stateChainSize = 0
+var roomDAGSize = 0
 var authChainSeenEvents = map[EventID]struct{}{}
-var stateSeenEvents = map[EventID]struct{}{}
+var roomDAGSeenEvents = map[EventID]struct{}{}
 
 func calculateAuthChainSize(event *eventNode) int {
 	maxDepth := 0
@@ -137,14 +146,16 @@ func calculateAuthChainSize(event *eventNode) int {
 	return maxDepth + 1
 }
 
-func calculateStateDAGSize(event *eventNode) int {
+func calculateRoomDAGSize(event *eventNode) int {
 	maxDepth := 0
-	if _, ok := stateSeenEvents[event.event.EventID]; !ok {
-		stateChainSize = stateChainSize + 1
+	if _, ok := roomDAGSeenEvents[event.event.EventID]; !ok {
+		roomDAGSize = roomDAGSize + 1
+	} else {
+		return maxDepth
 	}
-	stateSeenEvents[event.event.EventID] = struct{}{}
-	for _, child := range event.stateChildren {
-		maxDepth = int(math.Max(float64(maxDepth), float64(calculateStateDAGSize(child))))
+	roomDAGSeenEvents[event.event.EventID] = struct{}{}
+	for _, child := range event.roomChildren {
+		maxDepth = int(math.Max(float64(maxDepth), float64(calculateRoomDAGSize(child))))
 	}
 
 	return maxDepth + 1
@@ -191,13 +202,6 @@ func (d *RoomDAG) addEvent(newEvent Event) error {
 				event.authChainChildren[newEvent.EventID] = d.eventsByID[newEvent.EventID]
 			}
 		}
-
-		// TODO: This is wrong
-		if event.event != nil && event.event.StateKey != nil {
-			if _, ok := event.stateChildren[newEvent.EventID]; !ok {
-				event.stateChildren[newEvent.EventID] = d.eventsByID[newEvent.EventID]
-			}
-		}
 	}
 
 	for _, prevEvent := range newEvent.PrevEvents {
@@ -208,12 +212,16 @@ func (d *RoomDAG) addEvent(newEvent Event) error {
 		}
 		event := d.eventsByID[prevEvent]
 
-		// TODO: This is wrong
-		if event.event != nil && event.event.StateKey != nil {
-			if _, ok := event.stateChildren[newEvent.EventID]; !ok {
-				event.stateChildren[newEvent.EventID] = d.eventsByID[newEvent.EventID]
-			}
+		// NOTE: Populate the room DAG
+		if _, ok := event.roomChildren[newEvent.EventID]; !ok {
+			event.roomChildren[newEvent.EventID] = d.eventsByID[newEvent.EventID]
 		}
+		//	// TODO: This is wrong
+		//	if event.event != nil && event.event.StateKey != nil {
+		//		if _, ok := event.stateChildren[newEvent.EventID]; !ok {
+		//			event.stateChildren[newEvent.EventID] = d.eventsByID[newEvent.EventID]
+		//		}
+		//	}
 	}
 
 	// TODO: Create the full room DAG
