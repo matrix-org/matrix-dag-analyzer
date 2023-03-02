@@ -112,9 +112,9 @@ func (d *RoomDAG) PrintEventCounts() {
 	log.Info().Msg(fmt.Sprintf("State Events: %d", stateEventCount))
 
 	maxAuthDepth := calculateAuthDAGSize(d.createEvent)
-	log.Info().Msg(fmt.Sprintf("(Since Create): Auth DAG Size: %d, Max Depth: %d", authChainSize, maxAuthDepth))
+	log.Info().Msg(fmt.Sprintf("(From Create Event): Auth DAG Size: %d, Max Depth: %d", authChainSize, maxAuthDepth))
 	maxStateDepth := calculateStateDAGSize(d.createEvent)
-	log.Info().Msg(fmt.Sprintf("(Since Create): State DAG Size: %d, Max Depth: %d", stateChainSize, maxStateDepth))
+	log.Info().Msg(fmt.Sprintf("(From Create Event): State DAG Size: %d, Max Depth: %d", stateChainSize, maxStateDepth))
 }
 
 var authChainSize = 0
