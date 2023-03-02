@@ -29,7 +29,7 @@ func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{
 		Out:        os.Stderr,
 		TimeFormat: time.RFC3339,
-	}).With().Caller().Logger()
+	})
 
 	var filePath string
 	flag.StringVar(&filePath, "p", "", "Specify dag file name with path")
@@ -52,6 +52,6 @@ func main() {
 	log.Info().
 		Int("event_count", dag.TotalEventCount()).
 		Int("create_count", dag.EventCountByType(analyzer.EVENT_TYPE_CREATE)).
-		Msg("parsed dag file")
+		Msg("Successfully parsed dag file")
 	dag.PrintEventCounts()
 }

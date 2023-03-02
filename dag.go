@@ -27,7 +27,9 @@ import (
 type eventNode struct {
 	event *Event
 
-	roomChildren      map[EventID]*eventNode
+	roomChildren map[EventID]*eventNode
+	roomParents  map[EventID]*eventNode
+
 	stateChildren     map[EventID]*eventNode
 	authChainChildren map[EventID]*eventNode
 }
@@ -36,6 +38,7 @@ func newEventNode(event *Event) eventNode {
 	return eventNode{
 		event:             event,
 		roomChildren:      make(map[EventID]*eventNode),
+		roomParents:       make(map[EventID]*eventNode),
 		stateChildren:     make(map[EventID]*eventNode),
 		authChainChildren: make(map[EventID]*eventNode),
 	}
@@ -93,7 +96,8 @@ func (d *RoomDAG) EventCountByType(eventType string) int {
 }
 
 func (d *RoomDAG) PrintEventCounts() {
-	log.Info().Msg("Total Event Counts:")
+	log.Info().Msg("***************************************************************")
+	log.Info().Msg("Event Metrics:")
 	authEventCount := 0
 	for eventType, events := range d.eventsByType {
 		log.Info().Msg(fmt.Sprintf("%s: %d", eventType, len(events)))
@@ -101,6 +105,8 @@ func (d *RoomDAG) PrintEventCounts() {
 			authEventCount += len(events)
 		}
 	}
+	log.Info().Msg("***************************************************************")
+	log.Info().Msg("DAG Metrics:")
 	log.Info().Msg(fmt.Sprintf("Auth Events: %d", authEventCount))
 
 	stateEventCount := 0
@@ -114,6 +120,22 @@ func (d *RoomDAG) PrintEventCounts() {
 	}
 	log.Info().Msg(fmt.Sprintf("State Events: %d", stateEventCount))
 
+	forwardExtremities := 0
+	for _, event := range d.eventsByID {
+		if len(event.roomChildren) == 0 {
+			forwardExtremities = forwardExtremities + 1
+		}
+	}
+	log.Info().Msg(fmt.Sprintf("Forward Extremities: %d", forwardExtremities))
+
+	parentlessEvents := 0
+	for _, event := range d.eventsByID {
+		if len(event.roomParents) == 0 {
+			parentlessEvents = parentlessEvents + 1
+		}
+	}
+	log.Info().Msg(fmt.Sprintf("Parentless Events: %d", parentlessEvents))
+
 	maxAuthChainDepth := calculateAuthChainSize(d.createEvent)
 	log.Info().Msg(fmt.Sprintf("(From Create Event): Auth Chain Size: %d, Max Depth: %d", authChainSize, maxAuthChainDepth))
 	if authEventCount != authChainSize {
@@ -126,6 +148,7 @@ func (d *RoomDAG) PrintEventCounts() {
 	if totalEventCount != roomDAGSize {
 		log.Warn().Int("missing_events", totalEventCount-roomDAGSize).Msg(fmt.Sprintf("Room DAG size (%d) is less than the total amount of room events (%d)", roomDAGSize, totalEventCount))
 	}
+	log.Info().Msg("***************************************************************")
 }
 
 var authChainSize = 0
@@ -168,6 +191,9 @@ func (d *RoomDAG) addEvent(newEvent Event) error {
 	if d.roomID != nil && *d.roomID != newEvent.RoomID {
 		return fmt.Errorf("Received event with different room ID. Expected: %s, Got: %s", *d.roomID, newEvent.RoomID)
 	}
+	if d.createEvent != nil && newEvent.Type == EVENT_TYPE_CREATE {
+		return fmt.Errorf("More than 1 create event present. %s & %s", d.createEvent.event.EventID, newEvent.EventID)
+	}
 	if d.roomID == nil {
 		d.roomID = &newEvent.RoomID
 	}
@@ -176,16 +202,17 @@ func (d *RoomDAG) addEvent(newEvent Event) error {
 		newNode := newEventNode(&newEvent)
 		d.eventsByID[newEvent.EventID] = &newNode
 	}
-	d.eventsByID[newEvent.EventID].event = &newEvent
+	newNode := d.eventsByID[newEvent.EventID]
+	newNode.event = &newEvent
 
 	if newEvent.Type == EVENT_TYPE_CREATE {
-		d.createEvent = d.eventsByID[newEvent.EventID]
+		d.createEvent = newNode
 	}
 
 	if events, ok := d.eventsByType[newEvent.Type]; ok {
-		d.eventsByType[newEvent.Type] = append(events, d.eventsByID[newEvent.EventID])
+		d.eventsByType[newEvent.Type] = append(events, newNode)
 	} else {
-		d.eventsByType[newEvent.Type] = []*eventNode{d.eventsByID[newEvent.EventID]}
+		d.eventsByType[newEvent.Type] = []*eventNode{newNode}
 	}
 
 	for _, authEvent := range newEvent.AuthEvents {
@@ -194,34 +221,35 @@ func (d *RoomDAG) addEvent(newEvent Event) error {
 			newNode := newEventNode(nil)
 			d.eventsByID[authEvent] = &newNode
 		}
-		event := d.eventsByID[authEvent]
+		authNode := d.eventsByID[authEvent]
 
 		// NOTE: Populate the auth chains for the room
 		if _, ok := AuthEventTypes[newEvent.Type]; ok {
-			if _, ok := event.authChainChildren[newEvent.EventID]; !ok {
-				event.authChainChildren[newEvent.EventID] = d.eventsByID[newEvent.EventID]
+			if _, ok := authNode.authChainChildren[newEvent.EventID]; !ok {
+				authNode.authChainChildren[newEvent.EventID] = newNode
 			}
 		}
 	}
 
+	if len(newEvent.PrevEvents) == 0 {
+		println("sdlkfjasdjf")
+	}
 	for _, prevEvent := range newEvent.PrevEvents {
 		if _, ok := d.eventsByID[prevEvent]; !ok {
 			// NOTE: add a placeholder event
 			newNode := newEventNode(nil)
 			d.eventsByID[prevEvent] = &newNode
 		}
-		event := d.eventsByID[prevEvent]
+		prevNode := d.eventsByID[prevEvent]
 
 		// NOTE: Populate the room DAG
-		if _, ok := event.roomChildren[newEvent.EventID]; !ok {
-			event.roomChildren[newEvent.EventID] = d.eventsByID[newEvent.EventID]
+		if _, ok := prevNode.roomChildren[newEvent.EventID]; !ok {
+			prevNode.roomChildren[newEvent.EventID] = newNode
 		}
-		//	// TODO: This is wrong
-		//	if event.event != nil && event.event.StateKey != nil {
-		//		if _, ok := event.stateChildren[newEvent.EventID]; !ok {
-		//			event.stateChildren[newEvent.EventID] = d.eventsByID[newEvent.EventID]
-		//		}
-		//	}
+
+		if _, ok := newNode.roomParents[prevEvent]; !ok {
+			newNode.roomParents[prevEvent] = prevNode
+		}
 	}
 
 	// TODO: Create the full room DAG
