@@ -26,6 +26,7 @@ import (
 )
 
 func main() {
+	zerolog.TimeFieldFormat = time.RFC3339Nano
 	log.Logger = log.Output(zerolog.ConsoleWriter{
 		Out:        os.Stderr,
 		TimeFormat: time.RFC3339,
@@ -61,5 +62,5 @@ func main() {
 			Int("delta", dag.TotalEvents()-dag.EventsInFile()).
 			Msg("The number of events in the file does not match the number of events referenced in the file")
 	}
-	dag.PrintEventCounts()
+	dag.GenerateMetrics()
 }
