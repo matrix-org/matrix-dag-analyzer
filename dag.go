@@ -122,7 +122,7 @@ func (d *RoomDAG) PrintEventCounts() {
 	authEventCount := 0
 	for eventType, events := range d.eventsByType {
 		log.Info().Msg(fmt.Sprintf("%s: %d", eventType, len(events)))
-		if _, ok := AuthEventTypes[eventType]; ok {
+		if IsAuthEvent(eventType) {
 			authEventCount += len(events)
 		}
 	}
@@ -181,7 +181,7 @@ func (d *RoomDAG) PrintEventCounts() {
 	}
 
 	if gatherAuthChainMetrics {
-		maxAuthChainDepth := traverseChildAuthChainNodesOf(d.createEvent)
+		maxAuthChainDepth := traverseAuthChains(d.createEvent)
 		log.Info().Msg(fmt.Sprintf("(From Create Event): Auth Chain Size: %d, Max Depth: %d", authChainSize, maxAuthChainDepth))
 		if authEventCount != authChainSize {
 			log.Warn().Msg(fmt.Sprintf("Auth Chain size %d is less than the total amount of auth events (%d)", authChainSize, authEventCount))
@@ -202,23 +202,35 @@ func (d *RoomDAG) PrintEventCounts() {
 		//statsTranspose := graph.Check(graph.Transpose(roomGraph))
 		//log.Info().Msg(fmt.Sprintf("Dangling parents: %d", statsTranspose.Isolated))
 		//log.Info().Msg(fmt.Sprintf("Dangling children: %d", stats.Isolated))
-		maxRoomDepth := traverseChildPrevNodesOf(d.createEvent.event.EventID, d.createEvent)
-		log.Info().Msg(fmt.Sprintf("(From Create Event): Room DAG Size: %d, Max Depth: %d", roomDAGSize, maxRoomDepth))
+		// TODO: It takes too long to traverse the whole tree
+		// Shortcutting the tree results in inaccurate depth values
+		// But why aren't the fork values deterministic?
+		maxRoomDepth := traverseRoomDAG(d.createEvent.event.EventID, d.createEvent)
+		log.Info().Msg(fmt.Sprintf("(From Create Event): Room DAG Size: %d, Max Depth: %d, Forks: %d", roomDAGSize, maxRoomDepth, roomDAGForks))
 		totalEventCount := d.EventsInFile()
 		if totalEventCount != roomDAGSize {
 			log.Warn().Int("missing_events", totalEventCount-roomDAGSize).Msg(fmt.Sprintf("Room DAG size (%d) is less than the amount of events in the file (%d)", roomDAGSize, totalEventCount))
 		}
 
 		stateDAGForwardExtremities := 0
+		childrenCount := map[int]int{}
 		for _, node := range d.eventsByID {
-			if node.isStateEvent() && len(node.stateChildren) == 0 {
-				stateDAGForwardExtremities = stateDAGForwardExtremities + 1
+			if node.isStateEvent() {
+				count, ok := childrenCount[len(node.stateChildren)]
+				if !ok {
+					childrenCount[len(node.stateChildren)] = 1
+				} else {
+					childrenCount[len(node.stateChildren)] = count + 1
+				}
+				if len(node.stateChildren) == 0 {
+					stateDAGForwardExtremities = stateDAGForwardExtremities + 1
+				}
 			}
 		}
+		log.Info().Msg(fmt.Sprintf("State DAG Child Count [# of children: # of nodes]: %v", childrenCount))
 		log.Info().Msg(fmt.Sprintf("Forward Extremities (Room): %d", forwardExtremities))
 		log.Info().Msg(fmt.Sprintf("Forward Extremities (State DAG): %d", stateDAGForwardExtremities))
 
-		// TODO: Figure out why state DAG metrics aren't deterministic
 		maxStateDepth := traverseStateDAG(d.createEvent)
 		log.Info().Msg(fmt.Sprintf("(From Create Event): State DAG Size: %d, Max Depth: %d, Forks: %d", stateDAGSize, maxStateDepth, stateDAGForks))
 
@@ -262,14 +274,14 @@ func traverseStateDAG(event *eventNode) int {
 var authChainSize = 0
 var authChainSeenEvents = map[EventID]struct{}{}
 
-func traverseChildAuthChainNodesOf(event *eventNode) int {
+func traverseAuthChains(event *eventNode) int {
 	maxDepth := 0
 	if _, ok := authChainSeenEvents[event.event.EventID]; !ok {
 		authChainSize = authChainSize + 1
 	}
 	authChainSeenEvents[event.event.EventID] = struct{}{}
 	for _, child := range event.authChainChildren {
-		maxDepth = int(math.Max(float64(maxDepth), float64(traverseChildAuthChainNodesOf(child))))
+		maxDepth = int(math.Max(float64(maxDepth), float64(traverseAuthChains(child))))
 	}
 
 	return maxDepth + 1
@@ -280,8 +292,8 @@ type roomChain struct {
 }
 
 func (r *roomChain) contains(eventID EventID) bool {
-	for _, id := range r.roomChain {
-		if eventID == id.event.EventID {
+	for _, event := range r.roomChain {
+		if eventID == event.event.EventID {
 			return true
 		}
 	}
@@ -298,8 +310,8 @@ func (r *roomChain) pop() {
 
 func (r *roomChain) getEventsFromPrevInstanceOf(eventID EventID) []*eventNode {
 	index := 0
-	for i, id := range r.roomChain {
-		if eventID == id.event.EventID {
+	for i, event := range r.roomChain {
+		if eventID == event.event.EventID {
 			index = i
 			break
 		}
@@ -323,9 +335,10 @@ var chain = roomChain{
 }
 
 var roomDAGSize = 0
+var roomDAGForks = 0
 var roomDAGSeenEvents = map[EventID]struct{}{}
 
-func traverseChildPrevNodesOf(eventID EventID, event *eventNode) int {
+func traverseRoomDAG(eventID EventID, event *eventNode) int {
 	if event.isStateEvent() {
 		lastStateEvent := chain.getLastStateEvent()
 		if lastStateEvent != nil {
@@ -344,19 +357,22 @@ func traverseChildPrevNodesOf(eventID EventID, event *eventNode) int {
 	if _, ok := roomDAGSeenEvents[eventID]; !ok {
 		roomDAGSize = roomDAGSize + 1
 		roomDAGSeenEvents[eventID] = struct{}{}
+		if len(event.roomChildren) > 1 {
+			roomDAGForks = roomDAGForks + 1
+		}
 	} else {
 		if chain.contains(eventID) {
 			log.Error().
 				Str("loop", fmt.Sprintf("%v", append(chain.getEventsFromPrevInstanceOf(eventID), event))).
 				Msg("Loop Detected!")
 		}
-		return maxDepth
+		return maxDepth + 1
 	}
 
 	chain.push(event)
 
 	for childID, child := range event.roomChildren {
-		maxDepth = int(math.Max(float64(maxDepth), float64(traverseChildPrevNodesOf(childID, child))))
+		maxDepth = int(math.Max(float64(maxDepth), float64(traverseRoomDAG(childID, child))))
 	}
 
 	chain.pop()
@@ -406,7 +422,7 @@ func (d *RoomDAG) addEvent(newEvent Event) error {
 		authNode := d.eventsByID[authEventID]
 
 		// NOTE: Populate the auth chains for the room
-		if _, ok := AuthEventTypes[newEvent.Type]; ok {
+		if IsAuthEvent(newEvent.Type) {
 			if _, ok := authNode.authChainChildren[newEvent.EventID]; !ok {
 				authNode.authChainChildren[newEvent.EventID] = newNode
 			}

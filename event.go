@@ -29,6 +29,11 @@ var AuthEventTypes = map[string]struct{}{
 	EVENT_TYPE_THIRD_PARTY_INVITE: {},
 }
 
+func IsAuthEvent(eventType EventType) bool {
+	_, ok := AuthEventTypes[eventType]
+	return ok
+}
+
 type EventID = string
 
 type EventType = string
