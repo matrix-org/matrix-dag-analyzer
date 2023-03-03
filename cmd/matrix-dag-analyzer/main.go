@@ -29,7 +29,7 @@ func main() {
 	zerolog.TimeFieldFormat = time.RFC3339Nano
 	log.Logger = log.Output(zerolog.ConsoleWriter{
 		Out:        os.Stderr,
-		TimeFormat: time.RFC3339,
+		TimeFormat: "15:04:05.000",
 	})
 
 	var filePath string

@@ -287,7 +287,11 @@ func (d *RoomDAG) GenerateMetrics() {
 		}
 	}
 
+	log.Info().Msg("Generating Auth DAG...")
 	// TODO: generate the auth DAG
+
+	log.Info().Msg("Calculating Auth DAG Metrics...")
+	// TODO: walk the auth DAG
 
 	maxRoomDepth := 0
 	for _, depth := range roomDAGDepths {
@@ -341,7 +345,9 @@ func (d *RoomDAG) GenerateMetrics() {
 		return
 	}
 
+	log.Info().Msg("***************************************************************")
 	log.Info().Msg("DAG Metrics:")
+	log.Info().Msg(fmt.Sprintf("Room Events: %d", d.TotalEvents()))
 	log.Info().Msg(fmt.Sprintf("Auth Events: %d", authEventCount))
 	log.Info().Msg(fmt.Sprintf("State Events: %d", stateEventCount))
 
@@ -366,24 +372,27 @@ func (d *RoomDAG) GenerateMetrics() {
 		log.Warn().Msg("There should only be one state event without parents!")
 	}
 
+	// TODO: Auth DAG
+
 	log.Info().Msg(fmt.Sprintf("Forward Extremities (Room DAG): %d", statsRoom.Isolated))
 	log.Info().Msg(fmt.Sprintf("Forward Extremities (Auth Chain): %d", statsAuthChain.Isolated))
 	log.Info().Msg(fmt.Sprintf("Forward Extremities (State DAG): %d", statsState.Isolated))
+	// TODO: Auth DAG
 
 	log.Info().Msg(fmt.Sprintf("Room Edges: %d", statsRoom.Size))
 	log.Info().Msg(fmt.Sprintf("Auth Chain Edges: %d", statsAuthChain.Size))
 	log.Info().Msg(fmt.Sprintf("State Edges: %d", statsState.Size))
+	// TODO: Auth DAG
 
 	log.Info().Msg(fmt.Sprintf("Room DAG Child Count [# of children: # of nodes]: %v", roomChildCount))
 	log.Info().Msg(fmt.Sprintf("Auth Chain Child Count [# of children: # of nodes]: %v", authChainChildCount))
 	log.Info().Msg(fmt.Sprintf("State DAG Child Count [# of children: # of nodes]: %v", stateChildCount))
+	// TODO: Auth DAG
 
 	log.Info().Msg(fmt.Sprintf("Room DAG Size: %d, Max Depth: %d, Forks: %d", roomDAGSize, maxRoomDepth, roomDAGForks))
 	log.Info().Msg(fmt.Sprintf("Auth Chain Size: %d, Max Depth: %d, Forks: %d", authChainSize, maxAuthChainDepth, authChainForks))
 	log.Info().Msg(fmt.Sprintf("State DAG Size: %d, Max Depth: %d, Forks: %d", stateDAGSize, maxStateDepth, stateDAGForks))
-
-	// TODO: Log the auth DAG metrics
-	// TODO: Layout logs more clearly
+	// TODO: Auth DAG
 
 	// NOTE: uncomment this to see those events that aren't found when walking the roomDAG from the create event
 	//missingEvents := map[EventID]struct{}{}
