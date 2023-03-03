@@ -25,6 +25,9 @@ import (
 	"github.com/yourbasic/graph"
 )
 
+// TODO: make globals go away
+// TODO: refactor all the things
+
 var newNodeIndex = 0
 
 type eventNode struct {
@@ -261,12 +264,11 @@ func (d *RoomDAG) GenerateMetrics() {
 		return
 	}
 
-	log.Info().Msg("Calculating Room DAG Metrics...")
 	for nodeID, node := range d.eventsByID {
 		traverseRoomDAG(nodeID, node)
 	}
 
-	log.Info().Msg("Calculating Auth Chain Metrics...")
+	// NOTE: This should be a simple tree so only traverse it starting from the root
 	traverseAuthChain(d.createEvent)
 	if authEventCount != authChainSize {
 		log.Warn().Msg(fmt.Sprintf("Auth Chain size %d is less than the total amount of auth events (%d)", authChainSize, authEventCount))
@@ -277,27 +279,20 @@ func (d *RoomDAG) GenerateMetrics() {
 		maxAuthChainDepth = int(math.Max(float64(maxAuthChainDepth), float64(depth)))
 	}
 
-	log.Info().Msg("Generating State DAG...")
+	// NOTE: Must occur after traversing the room DAG
 	for nodeID, node := range d.eventsByID {
-		queue := NewEventQueue()
-		generateStateDAG(nodeID, node, node, &queue)
+		stateQueue := NewEventQueue()
+		generateStateDAG(nodeID, node, node, &stateQueue)
+
+		authQueue := NewEventQueue()
+		generateAuthDAG(nodeID, node, node, &authQueue)
 	}
 
-	log.Info().Msg("Calculating State DAG Metrics...")
 	for _, node := range d.eventsByID {
 		if node.isStateEvent() {
 			traverseStateDAG(node)
 		}
-	}
 
-	log.Info().Msg("Generating Auth DAG...")
-	for nodeID, node := range d.eventsByID {
-		queue := NewEventQueue()
-		generateAuthDAG(nodeID, node, node, &queue)
-	}
-
-	log.Info().Msg("Calculating Auth DAG Metrics...")
-	for _, node := range d.eventsByID {
 		if node.isAuthEvent() {
 			traverseAuthDAG(node)
 		}
@@ -371,49 +366,50 @@ func (d *RoomDAG) GenerateMetrics() {
 		return
 	}
 
-	log.Info().Msg("***************************************************************")
-	log.Info().Msg("DAG Metrics:")
-	log.Info().Msg(fmt.Sprintf("Room Events: %d", d.TotalEvents()))
-	log.Info().Msg(fmt.Sprintf("Auth Events: %d", authEventCount))
-	log.Info().Msg(fmt.Sprintf("State Events: %d", stateEventCount))
-
 	statsRoom := graph.Check(roomGraph)
 	statsRoomTranspose := graph.Check(graph.Transpose(roomGraph))
-	log.Info().Msg(fmt.Sprintf("Backward Extremities (Room DAG): %d", statsRoomTranspose.Isolated))
 	if statsRoomTranspose.Isolated != 1 {
 		log.Warn().Msg("There should only be one room event without parents!")
 	}
 
 	statsAuthChain := graph.Check(authChainGraph)
 	statsAuthChainTranspose := graph.Check(graph.Transpose(authChainGraph))
-	log.Info().Msg(fmt.Sprintf("Backward Extremities (Auth Chain): %d", statsAuthChainTranspose.Isolated))
 	if statsAuthChainTranspose.Isolated != 1 {
 		log.Warn().Msg("There should only be one auth chain event without parents!")
 	}
 
 	statsState := graph.Check(stateGraph)
 	statsStateTranspose := graph.Check(graph.Transpose(stateGraph))
-	log.Info().Msg(fmt.Sprintf("Backward Extremities (State DAG): %d", statsStateTranspose.Isolated))
 	if statsStateTranspose.Isolated != 1 {
 		log.Warn().Msg("There should only be one state event without parents!")
 	}
 
 	statsAuth := graph.Check(authGraph)
 	statsAuthTranspose := graph.Check(graph.Transpose(authGraph))
-	log.Info().Msg(fmt.Sprintf("Backward Extremities (Auth DAG): %d", statsAuthTranspose.Isolated))
 	if statsAuthTranspose.Isolated != 1 {
 		log.Warn().Msg("There should only be one auth event without parents!")
 	}
 
-	log.Info().Msg(fmt.Sprintf("Forward Extremities (Room DAG): %d", statsRoom.Isolated))
-	log.Info().Msg(fmt.Sprintf("Forward Extremities (Auth Chain): %d", statsAuthChain.Isolated))
-	log.Info().Msg(fmt.Sprintf("Forward Extremities (State DAG): %d", statsState.Isolated))
-	log.Info().Msg(fmt.Sprintf("Forward Extremities (Auth DAG): %d", statsAuth.Isolated))
+	log.Info().Msg("***************************************************************")
+	log.Info().Msg("DAG Metrics:")
+	log.Info().Msg(fmt.Sprintf("Room Events: %d", d.TotalEvents()))
+	log.Info().Msg(fmt.Sprintf("Auth Events: %d", authEventCount))
+	log.Info().Msg(fmt.Sprintf("State Events: %d", stateEventCount))
 
 	log.Info().Msg(fmt.Sprintf("Room DAG Edges: %d", statsRoom.Size))
 	log.Info().Msg(fmt.Sprintf("Auth Chain Edges: %d", statsAuthChain.Size))
 	log.Info().Msg(fmt.Sprintf("State DAG Edges: %d", statsState.Size))
 	log.Info().Msg(fmt.Sprintf("Auth DAG Edges: %d", statsAuth.Size))
+
+	log.Info().Msg(fmt.Sprintf("Backward Extremities (Room DAG): %d", statsRoomTranspose.Isolated))
+	log.Info().Msg(fmt.Sprintf("Backward Extremities (Auth Chain): %d", statsAuthChainTranspose.Isolated))
+	log.Info().Msg(fmt.Sprintf("Backward Extremities (State DAG): %d", statsStateTranspose.Isolated))
+	log.Info().Msg(fmt.Sprintf("Backward Extremities (Auth DAG): %d", statsAuthTranspose.Isolated))
+
+	log.Info().Msg(fmt.Sprintf("Forward Extremities (Room DAG): %d", statsRoom.Isolated))
+	log.Info().Msg(fmt.Sprintf("Forward Extremities (Auth Chain): %d", statsAuthChain.Isolated))
+	log.Info().Msg(fmt.Sprintf("Forward Extremities (State DAG): %d", statsState.Isolated))
+	log.Info().Msg(fmt.Sprintf("Forward Extremities (Auth DAG): %d", statsAuth.Isolated))
 
 	log.Info().Msg(fmt.Sprintf("Room DAG Child Count [# of children: # of nodes]: %v", roomChildCount))
 	log.Info().Msg(fmt.Sprintf("Auth Chain Child Count [# of children: # of nodes]: %v", authChainChildCount))
