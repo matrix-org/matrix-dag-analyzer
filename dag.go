@@ -25,9 +25,6 @@ import (
 	"github.com/yourbasic/graph"
 )
 
-// TODO: make globals go away
-var newNodeIndex = 0
-
 type eventNode struct {
 	event      *Event
 	roomIndex  int
@@ -67,6 +64,8 @@ func (e *eventNode) isAuthEvent() bool {
 }
 
 type RoomDAG struct {
+	eventCount int
+
 	eventsByID   map[EventID]*eventNode
 	eventsByType map[EventType][]*eventNode
 
@@ -76,6 +75,7 @@ type RoomDAG struct {
 
 func NewRoomDAG() RoomDAG {
 	return RoomDAG{
+		eventCount:   0,
 		eventsByID:   make(map[EventID]*eventNode),
 		eventsByType: make(map[EventType][]*eventNode),
 		createEvent:  nil,
@@ -124,8 +124,8 @@ func (d *RoomDAG) addEvent(newEvent Event) error {
 	}
 
 	if _, ok := d.eventsByID[newEvent.EventID]; !ok {
-		newNode := newEventNode(&newEvent, newNodeIndex)
-		newNodeIndex += 1
+		newNode := newEventNode(&newEvent, d.eventCount)
+		d.eventCount += 1
 		d.eventsByID[newEvent.EventID] = &newNode
 	}
 	newNode := d.eventsByID[newEvent.EventID]
@@ -144,8 +144,8 @@ func (d *RoomDAG) addEvent(newEvent Event) error {
 	for _, authEventID := range newEvent.AuthEvents {
 		if _, ok := d.eventsByID[authEventID]; !ok {
 			// NOTE: add a placeholder event
-			newNode := newEventNode(nil, newNodeIndex)
-			newNodeIndex += 1
+			newNode := newEventNode(nil, d.eventCount)
+			d.eventCount += 1
 			d.eventsByID[authEventID] = &newNode
 		}
 		authNode := d.eventsByID[authEventID]
@@ -165,8 +165,8 @@ func (d *RoomDAG) addEvent(newEvent Event) error {
 	for _, prevEventID := range newEvent.PrevEvents {
 		if _, ok := d.eventsByID[prevEventID]; !ok {
 			// NOTE: add a placeholder event
-			newNode := newEventNode(nil, newNodeIndex)
-			newNodeIndex += 1
+			newNode := newEventNode(nil, d.eventCount)
+			d.eventCount += 1
 			d.eventsByID[prevEventID] = &newNode
 		}
 		prevNode := d.eventsByID[prevEventID]
