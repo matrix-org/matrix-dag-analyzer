@@ -28,15 +28,16 @@ import (
 var newNodeIndex = 0
 
 type eventNode struct {
-	event          *Event
-	roomIndex      int
-	authChainIndex *int
-	stateIndex     *int
+	event      *Event
+	roomIndex  int
+	authIndex  *int
+	stateIndex *int
 
 	roomChildren map[EventID]*eventNode
 	roomParents  map[EventID]*eventNode
 
 	stateChildren     map[EventID]*eventNode
+	authChildren      map[EventID]*eventNode
 	authChainChildren map[EventID]*eventNode
 	authChainParents  map[EventID]*eventNode
 }
@@ -45,11 +46,12 @@ func newEventNode(event *Event, index int) eventNode {
 	return eventNode{
 		event:             event,
 		roomIndex:         index,
-		authChainIndex:    nil,
+		authIndex:         nil,
 		stateIndex:        nil,
 		roomChildren:      make(map[EventID]*eventNode),
 		roomParents:       make(map[EventID]*eventNode),
 		stateChildren:     make(map[EventID]*eventNode),
+		authChildren:      make(map[EventID]*eventNode),
 		authChainChildren: make(map[EventID]*eventNode),
 		authChainParents:  make(map[EventID]*eventNode),
 	}
@@ -224,9 +226,10 @@ func (d *RoomDAG) GenerateMetrics() {
 
 		if node.isAuthEvent() {
 			index := authEventCount
-			node.authChainIndex = &index
+			node.authIndex = &index
 			authEventCount += 1
 			authChainDepths[nodeID] = 0
+			authDAGDepths[nodeID] = 0
 		}
 
 		for _, child := range node.roomChildren {
@@ -246,7 +249,7 @@ func (d *RoomDAG) GenerateMetrics() {
 	for _, node := range d.eventsByID {
 		if node.isAuthEvent() {
 			for _, child := range node.authChainChildren {
-				authChainGraph.Add(*node.authChainIndex, *child.authChainIndex)
+				authChainGraph.Add(*node.authIndex, *child.authIndex)
 			}
 		}
 	}
@@ -277,7 +280,7 @@ func (d *RoomDAG) GenerateMetrics() {
 	log.Info().Msg("Generating State DAG...")
 	for nodeID, node := range d.eventsByID {
 		queue := NewEventQueue()
-		createStateDAG(nodeID, node, node, &queue)
+		generateStateDAG(nodeID, node, node, &queue)
 	}
 
 	log.Info().Msg("Calculating State DAG Metrics...")
@@ -288,10 +291,17 @@ func (d *RoomDAG) GenerateMetrics() {
 	}
 
 	log.Info().Msg("Generating Auth DAG...")
-	// TODO: generate the auth DAG
+	for nodeID, node := range d.eventsByID {
+		queue := NewEventQueue()
+		generateAuthDAG(nodeID, node, node, &queue)
+	}
 
 	log.Info().Msg("Calculating Auth DAG Metrics...")
-	// TODO: walk the auth DAG
+	for _, node := range d.eventsByID {
+		if node.isAuthEvent() {
+			traverseAuthDAG(node)
+		}
+	}
 
 	maxRoomDepth := 0
 	for _, depth := range roomDAGDepths {
@@ -303,10 +313,17 @@ func (d *RoomDAG) GenerateMetrics() {
 		maxStateDepth = int(math.Max(float64(maxStateDepth), float64(depth)))
 	}
 
+	maxAuthDepth := 0
+	for _, depth := range authDAGDepths {
+		maxAuthDepth = int(math.Max(float64(maxAuthDepth), float64(depth)))
+	}
+
 	roomChildCount := map[int]int{}
 	authChainChildCount := map[int]int{}
+	authChildCount := map[int]int{}
 	stateChildCount := map[int]int{}
 	stateGraph := graph.New(stateEventCount)
+	authGraph := graph.New(authEventCount)
 	for _, node := range d.eventsByID {
 		if node.isStateEvent() {
 			for _, child := range node.stateChildren {
@@ -321,11 +338,20 @@ func (d *RoomDAG) GenerateMetrics() {
 		}
 
 		if node.isAuthEvent() {
+			for _, child := range node.authChildren {
+				authGraph.Add(*node.authIndex, *child.authIndex)
+			}
 			count, ok := authChainChildCount[len(node.authChainChildren)]
 			if !ok {
 				authChainChildCount[len(node.authChainChildren)] = 1
 			} else {
 				authChainChildCount[len(node.authChainChildren)] = count + 1
+			}
+			count, ok = authChildCount[len(node.authChildren)]
+			if !ok {
+				authChildCount[len(node.authChildren)] = 1
+			} else {
+				authChildCount[len(node.authChildren)] = count + 1
 			}
 		}
 
@@ -372,27 +398,32 @@ func (d *RoomDAG) GenerateMetrics() {
 		log.Warn().Msg("There should only be one state event without parents!")
 	}
 
-	// TODO: Auth DAG
+	statsAuth := graph.Check(authGraph)
+	statsAuthTranspose := graph.Check(graph.Transpose(authGraph))
+	log.Info().Msg(fmt.Sprintf("Backward Extremities (Auth DAG): %d", statsAuthTranspose.Isolated))
+	if statsAuthTranspose.Isolated != 1 {
+		log.Warn().Msg("There should only be one auth event without parents!")
+	}
 
 	log.Info().Msg(fmt.Sprintf("Forward Extremities (Room DAG): %d", statsRoom.Isolated))
 	log.Info().Msg(fmt.Sprintf("Forward Extremities (Auth Chain): %d", statsAuthChain.Isolated))
 	log.Info().Msg(fmt.Sprintf("Forward Extremities (State DAG): %d", statsState.Isolated))
-	// TODO: Auth DAG
+	log.Info().Msg(fmt.Sprintf("Forward Extremities (Auth DAG): %d", statsAuth.Isolated))
 
-	log.Info().Msg(fmt.Sprintf("Room Edges: %d", statsRoom.Size))
+	log.Info().Msg(fmt.Sprintf("Room DAG Edges: %d", statsRoom.Size))
 	log.Info().Msg(fmt.Sprintf("Auth Chain Edges: %d", statsAuthChain.Size))
-	log.Info().Msg(fmt.Sprintf("State Edges: %d", statsState.Size))
-	// TODO: Auth DAG
+	log.Info().Msg(fmt.Sprintf("State DAG Edges: %d", statsState.Size))
+	log.Info().Msg(fmt.Sprintf("Auth DAG Edges: %d", statsAuth.Size))
 
 	log.Info().Msg(fmt.Sprintf("Room DAG Child Count [# of children: # of nodes]: %v", roomChildCount))
 	log.Info().Msg(fmt.Sprintf("Auth Chain Child Count [# of children: # of nodes]: %v", authChainChildCount))
 	log.Info().Msg(fmt.Sprintf("State DAG Child Count [# of children: # of nodes]: %v", stateChildCount))
-	// TODO: Auth DAG
+	log.Info().Msg(fmt.Sprintf("Auth DAG Child Count [# of children: # of nodes]: %v", authChildCount))
 
 	log.Info().Msg(fmt.Sprintf("Room DAG Size: %d, Max Depth: %d, Forks: %d", roomDAGSize, maxRoomDepth, roomDAGForks))
 	log.Info().Msg(fmt.Sprintf("Auth Chain Size: %d, Max Depth: %d, Forks: %d", authChainSize, maxAuthChainDepth, authChainForks))
 	log.Info().Msg(fmt.Sprintf("State DAG Size: %d, Max Depth: %d, Forks: %d", stateDAGSize, maxStateDepth, stateDAGForks))
-	// TODO: Auth DAG
+	log.Info().Msg(fmt.Sprintf("Auth DAG Size: %d, Max Depth: %d, Forks: %d", authDAGSize, maxAuthDepth, authDAGForks))
 
 	// NOTE: uncomment this to see those events that aren't found when walking the roomDAG from the create event
 	//missingEvents := map[EventID]struct{}{}
@@ -408,28 +439,29 @@ func (d *RoomDAG) GenerateMetrics() {
 	log.Info().Msg("***************************************************************")
 }
 
-var stateDAGSize = 0
-var stateDAGForks = 0
-var stateDAGSeenEvents = map[EventID]struct{}{}
+var roomDAGSize = 0
+var roomDAGForks = 0
+var roomDAGSeenEvents = map[EventID]struct{}{}
 
 // NOTE: must init all events to 0
-var stateDAGDepths = map[EventID]int{}
+var roomDAGDepths = map[EventID]int{}
 
-func traverseStateDAG(event *eventNode) {
-	if _, ok := stateDAGSeenEvents[event.event.EventID]; !ok {
-		stateDAGSize += 1
-		if len(event.stateChildren) > 1 {
-			stateDAGForks += 1
+func traverseRoomDAG(eventID EventID, event *eventNode) {
+	if _, ok := roomDAGSeenEvents[eventID]; !ok {
+		roomDAGSize += 1
+		roomDAGSeenEvents[eventID] = struct{}{}
+		if len(event.roomChildren) > 1 {
+			roomDAGForks += 1
 		}
 	}
 
-	stateDAGSeenEvents[event.event.EventID] = struct{}{}
-	for childID, child := range event.stateChildren {
-		if _, ok := stateDAGSeenEvents[childID]; !ok {
-			traverseStateDAG(child)
+	for childID, child := range event.roomChildren {
+		// Only traverse children we haven't already seen
+		if _, ok := roomDAGSeenEvents[childID]; !ok {
+			traverseRoomDAG(childID, child)
 		}
 
-		stateDAGDepths[event.event.EventID] = int(math.Max(float64(stateDAGDepths[event.event.EventID]), float64(1+stateDAGDepths[childID])))
+		roomDAGDepths[eventID] = int(math.Max(float64(roomDAGDepths[eventID]), float64(1+roomDAGDepths[childID])))
 	}
 }
 
@@ -458,12 +490,62 @@ func traverseAuthChain(event *eventNode) {
 	}
 }
 
-var roomDAGSize = 0
-var roomDAGForks = 0
-var roomDAGSeenEvents = map[EventID]struct{}{}
+var stateDAGSize = 0
+var stateDAGForks = 0
+var stateDAGSeenEvents = map[EventID]struct{}{}
 
 // NOTE: must init all events to 0
-var roomDAGDepths = map[EventID]int{}
+var stateDAGDepths = map[EventID]int{}
+
+func traverseStateDAG(event *eventNode) {
+	if _, ok := stateDAGSeenEvents[event.event.EventID]; !ok {
+		stateDAGSize += 1
+		if len(event.stateChildren) > 1 {
+			stateDAGForks += 1
+		}
+	}
+
+	stateDAGSeenEvents[event.event.EventID] = struct{}{}
+	for childID, child := range event.stateChildren {
+		if _, ok := stateDAGSeenEvents[childID]; !ok {
+			traverseStateDAG(child)
+		}
+
+		stateDAGDepths[event.event.EventID] = int(math.Max(float64(stateDAGDepths[event.event.EventID]), float64(1+stateDAGDepths[childID])))
+	}
+}
+
+var authDAGSize = 0
+var authDAGForks = 0
+var authDAGSeenEvents = map[EventID]struct{}{}
+
+// NOTE: must init all events to 0
+var authDAGDepths = map[EventID]int{}
+
+func traverseAuthDAG(event *eventNode) {
+	if _, ok := authDAGSeenEvents[event.event.EventID]; !ok {
+		authDAGSize += 1
+		if len(event.authChildren) > 1 {
+			authDAGForks += 1
+		}
+	}
+
+	authDAGSeenEvents[event.event.EventID] = struct{}{}
+	for childID, child := range event.authChildren {
+		if _, ok := authDAGSeenEvents[childID]; !ok {
+			traverseAuthDAG(child)
+		}
+
+		authDAGDepths[event.event.EventID] = int(math.Max(float64(authDAGDepths[event.event.EventID]), float64(1+authDAGDepths[childID])))
+	}
+}
+
+type EventEnumType int64
+
+const (
+	AuthEvent EventEnumType = iota
+	StateEvent
+)
 
 type EventQueue struct {
 	queue []*eventNode
@@ -483,19 +565,35 @@ func (e *EventQueue) Pop() {
 	e.queue = e.queue[:len(e.queue)-1]
 }
 
-func (e *EventQueue) AddStateChild(eventID EventID, event *eventNode) {
+func (e *EventQueue) AddChild(eventID EventID, event *eventNode, eventType EventEnumType) {
 	for _, queueEvent := range e.queue {
-		if _, ok := queueEvent.stateChildren[eventID]; !ok {
-			queueEvent.stateChildren[eventID] = event
+		switch eventType {
+		case AuthEvent:
+			if _, ok := queueEvent.authChildren[eventID]; !ok {
+				queueEvent.authChildren[eventID] = event
+			}
+		case StateEvent:
+			if _, ok := queueEvent.stateChildren[eventID]; !ok {
+				queueEvent.stateChildren[eventID] = event
+			}
 		}
 	}
 }
 
-func (e *EventQueue) AddStateChildrenFromNode(event *eventNode) {
+func (e *EventQueue) AddChildrenFromNode(event *eventNode, eventType EventEnumType) {
 	for _, queueEvent := range e.queue {
-		for childID, child := range event.stateChildren {
-			if _, ok := queueEvent.stateChildren[childID]; !ok {
-				queueEvent.stateChildren[childID] = child
+		switch eventType {
+		case AuthEvent:
+			for childID, child := range event.authChildren {
+				if _, ok := queueEvent.authChildren[childID]; !ok {
+					queueEvent.authChildren[childID] = child
+				}
+			}
+		case StateEvent:
+			for childID, child := range event.stateChildren {
+				if _, ok := queueEvent.stateChildren[childID]; !ok {
+					queueEvent.stateChildren[childID] = child
+				}
 			}
 		}
 	}
@@ -503,11 +601,11 @@ func (e *EventQueue) AddStateChildrenFromNode(event *eventNode) {
 
 var stateDAGCreationSeenEvents = map[EventID]struct{}{}
 
-func createStateDAG(eventID EventID, event *eventNode, origin *eventNode, queue *EventQueue) {
+func generateStateDAG(eventID EventID, event *eventNode, origin *eventNode, queue *EventQueue) {
 	stateDAGCreationSeenEvents[eventID] = struct{}{}
 
 	if event != origin && event.isStateEvent() {
-		queue.AddStateChild(eventID, event)
+		queue.AddChild(eventID, event, StateEvent)
 		return
 	}
 
@@ -515,33 +613,40 @@ func createStateDAG(eventID EventID, event *eventNode, origin *eventNode, queue 
 	for childID, child := range event.roomChildren {
 		// Only traverse children we haven't already seen
 		if _, ok := stateDAGCreationSeenEvents[childID]; !ok {
-			createStateDAG(childID, child, origin, queue)
+			generateStateDAG(childID, child, origin, queue)
 		} else {
 			if child.isStateEvent() {
-				queue.AddStateChild(childID, child)
+				queue.AddChild(childID, child, StateEvent)
 			} else {
-				queue.AddStateChildrenFromNode(child)
+				queue.AddChildrenFromNode(child, StateEvent)
 			}
 		}
 	}
 	queue.Pop()
 }
 
-func traverseRoomDAG(eventID EventID, event *eventNode) {
-	if _, ok := roomDAGSeenEvents[eventID]; !ok {
-		roomDAGSize += 1
-		roomDAGSeenEvents[eventID] = struct{}{}
-		if len(event.roomChildren) > 1 {
-			roomDAGForks += 1
-		}
+var authDAGCreationSeenEvents = map[EventID]struct{}{}
+
+func generateAuthDAG(eventID EventID, event *eventNode, origin *eventNode, queue *EventQueue) {
+	authDAGCreationSeenEvents[eventID] = struct{}{}
+
+	if event != origin && event.isAuthEvent() {
+		queue.AddChild(eventID, event, AuthEvent)
+		return
 	}
 
+	queue.Push(event)
 	for childID, child := range event.roomChildren {
 		// Only traverse children we haven't already seen
-		if _, ok := roomDAGSeenEvents[childID]; !ok {
-			traverseRoomDAG(childID, child)
+		if _, ok := authDAGCreationSeenEvents[childID]; !ok {
+			generateAuthDAG(childID, child, origin, queue)
+		} else {
+			if child.isAuthEvent() {
+				queue.AddChild(childID, child, AuthEvent)
+			} else {
+				queue.AddChildrenFromNode(child, AuthEvent)
+			}
 		}
-
-		roomDAGDepths[eventID] = int(math.Max(float64(roomDAGDepths[eventID]), float64(1+roomDAGDepths[childID])))
 	}
+	queue.Pop()
 }
