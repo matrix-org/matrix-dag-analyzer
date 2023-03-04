@@ -22,16 +22,16 @@ const (
 )
 
 type EventQueue struct {
-	queue []*eventNode
+	queue []*EventNode
 }
 
 func NewEventQueue() EventQueue {
 	return EventQueue{
-		queue: []*eventNode{},
+		queue: []*EventNode{},
 	}
 }
 
-func (e *EventQueue) Push(event *eventNode) {
+func (e *EventQueue) Push(event *EventNode) {
 	e.queue = append(e.queue, event)
 }
 
@@ -39,7 +39,7 @@ func (e *EventQueue) Pop() {
 	e.queue = e.queue[:len(e.queue)-1]
 }
 
-func (e *EventQueue) AddChild(eventID EventID, event *eventNode, eventType EventEnumType) {
+func (e *EventQueue) AddChild(eventID EventID, event *EventNode, eventType EventEnumType) {
 	for _, queueEvent := range e.queue {
 		switch eventType {
 		case AuthEvent:
@@ -54,7 +54,7 @@ func (e *EventQueue) AddChild(eventID EventID, event *eventNode, eventType Event
 	}
 }
 
-func (e *EventQueue) AddChildrenFromNode(event *eventNode, eventType EventEnumType) {
+func (e *EventQueue) AddChildrenFromNode(event *EventNode, eventType EventEnumType) {
 	for _, queueEvent := range e.queue {
 		switch eventType {
 		case AuthEvent:
