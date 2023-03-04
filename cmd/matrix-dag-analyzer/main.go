@@ -62,5 +62,5 @@ func main() {
 			Int("delta", dag.TotalEvents()-dag.EventsInFile()).
 			Msg("The number of events in the file does not match the number of events referenced in the file")
 	}
-	dag.GenerateMetrics()
+	dag.PrintMetrics()
 }

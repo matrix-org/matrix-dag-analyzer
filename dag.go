@@ -33,6 +33,11 @@ type RoomDAG struct {
 
 	createEvent *EventNode
 	roomID      *string
+
+	roomMetrics      GraphMetrics
+	authChainMetrics GraphMetrics
+	stateMetrics     GraphMetrics
+	authMetrics      GraphMetrics
 }
 
 func NewRoomDAG() RoomDAG {
@@ -67,6 +72,13 @@ func ParseDAGFromFile(filename string) (*RoomDAG, error) {
 			return nil, fmt.Errorf("Line %d: %w", lineNumber, err)
 		}
 	}
+
+	dag.roomMetrics = dag.GenerateDAGMetrics(RoomDAGType)
+	dag.authChainMetrics = dag.GenerateDAGMetrics(AuthChainType)
+	dag.GenerateDAG(AuthDAGType)
+	dag.authMetrics = dag.GenerateDAGMetrics(AuthDAGType)
+	dag.GenerateDAG(StateDAGType)
+	dag.stateMetrics = dag.GenerateDAGMetrics(StateDAGType)
 
 	return &dag, nil
 }
@@ -182,7 +194,7 @@ func getGraphStats(input *graph.Mutable, graphType string) (graph.Stats, graph.S
 	return statsRoom, statsRoomTranspose
 }
 
-func (d *RoomDAG) GenerateMetrics() {
+func (d *RoomDAG) PrintMetrics() {
 	log.Info().Msg("***************************************************************")
 	log.Info().Msg("Event Metrics:")
 	for eventType, events := range d.eventsByType {
@@ -190,25 +202,16 @@ func (d *RoomDAG) GenerateMetrics() {
 	}
 	log.Info().Msg("***************************************************************")
 
-	roomMetrics := d.GenerateDAGMetrics(RoomDAGType)
-	statsRoom, statsRoomTranspose := getGraphStats(roomMetrics.graph, "Room")
-
-	authChainMetrics := d.GenerateDAGMetrics(AuthChainType)
-	statsAuthChain, statsAuthChainTranspose := getGraphStats(authChainMetrics.graph, "Auth Chain")
-
-	d.GenerateDAG(AuthDAGType)
-	authMetrics := d.GenerateDAGMetrics(AuthDAGType)
-	statsAuth, statsAuthTranspose := getGraphStats(authMetrics.graph, "Auth")
-
-	d.GenerateDAG(StateDAGType)
-	stateMetrics := d.GenerateDAGMetrics(StateDAGType)
-	statsState, statsStateTranspose := getGraphStats(stateMetrics.graph, "State")
+	statsRoom, statsRoomTranspose := getGraphStats(d.roomMetrics.graph, "Room")
+	statsAuthChain, statsAuthChainTranspose := getGraphStats(d.authChainMetrics.graph, "Auth Chain")
+	statsAuth, statsAuthTranspose := getGraphStats(d.authMetrics.graph, "Auth")
+	statsState, statsStateTranspose := getGraphStats(d.stateMetrics.graph, "State")
 
 	log.Info().Msg("***************************************************************")
 	log.Info().Msg("DAG Metrics:")
 	log.Info().Msg(fmt.Sprintf("Room Events: %d", d.TotalEvents()))
-	log.Info().Msg(fmt.Sprintf("Auth Events: %d", authMetrics.size))
-	log.Info().Msg(fmt.Sprintf("State Events: %d", stateMetrics.size))
+	log.Info().Msg(fmt.Sprintf("Auth Events: %d", d.authMetrics.size))
+	log.Info().Msg(fmt.Sprintf("State Events: %d", d.stateMetrics.size))
 
 	log.Info().Msg(fmt.Sprintf("Room DAG Edges: %d", statsRoom.Size))
 	log.Info().Msg(fmt.Sprintf("Auth Chain Edges: %d", statsAuthChain.Size))
@@ -225,15 +228,15 @@ func (d *RoomDAG) GenerateMetrics() {
 	log.Info().Msg(fmt.Sprintf("Forward Extremities (State DAG): %d", statsState.Isolated))
 	log.Info().Msg(fmt.Sprintf("Forward Extremities (Auth DAG): %d", statsAuth.Isolated))
 
-	log.Info().Msg(fmt.Sprintf("Room DAG Child Count [# of children: # of nodes]: %v", roomMetrics.childCount))
-	log.Info().Msg(fmt.Sprintf("Auth Chain Child Count [# of children: # of nodes]: %v", authChainMetrics.childCount))
-	log.Info().Msg(fmt.Sprintf("State DAG Child Count [# of children: # of nodes]: %v", stateMetrics.childCount))
-	log.Info().Msg(fmt.Sprintf("Auth DAG Child Count [# of children: # of nodes]: %v", authMetrics.childCount))
+	log.Info().Msg(fmt.Sprintf("Room DAG Child Count [# of children: # of nodes]: %v", d.roomMetrics.childCount))
+	log.Info().Msg(fmt.Sprintf("Auth Chain Child Count [# of children: # of nodes]: %v", d.authChainMetrics.childCount))
+	log.Info().Msg(fmt.Sprintf("State DAG Child Count [# of children: # of nodes]: %v", d.stateMetrics.childCount))
+	log.Info().Msg(fmt.Sprintf("Auth DAG Child Count [# of children: # of nodes]: %v", d.authMetrics.childCount))
 
-	log.Info().Msg(fmt.Sprintf("Room DAG Size: %d, Max Depth: %d, Forks: %d", roomMetrics.size, roomMetrics.maxDepth, roomMetrics.forks))
-	log.Info().Msg(fmt.Sprintf("Auth Chain Size: %d, Max Depth: %d, Forks: %d", authChainMetrics.size, authChainMetrics.maxDepth, authChainMetrics.forks))
-	log.Info().Msg(fmt.Sprintf("State DAG Size: %d, Max Depth: %d, Forks: %d", stateMetrics.size, stateMetrics.maxDepth, stateMetrics.forks))
-	log.Info().Msg(fmt.Sprintf("Auth DAG Size: %d, Max Depth: %d, Forks: %d", authMetrics.size, authMetrics.maxDepth, authMetrics.forks))
+	log.Info().Msg(fmt.Sprintf("Room DAG Size: %d, Max Depth: %d, Forks: %d", d.roomMetrics.size, d.roomMetrics.maxDepth, d.roomMetrics.forks))
+	log.Info().Msg(fmt.Sprintf("Auth Chain Size: %d, Max Depth: %d, Forks: %d", d.authChainMetrics.size, d.authChainMetrics.maxDepth, d.authChainMetrics.forks))
+	log.Info().Msg(fmt.Sprintf("State DAG Size: %d, Max Depth: %d, Forks: %d", d.stateMetrics.size, d.stateMetrics.maxDepth, d.stateMetrics.forks))
+	log.Info().Msg(fmt.Sprintf("Auth DAG Size: %d, Max Depth: %d, Forks: %d", d.authMetrics.size, d.authMetrics.maxDepth, d.authMetrics.forks))
 
 	// NOTE: uncomment this to see those events that aren't found when walking the roomDAG from the create event
 	//missingEvents := map[EventID]struct{}{}
