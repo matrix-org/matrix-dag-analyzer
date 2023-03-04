@@ -196,10 +196,12 @@ func getGraphStats(input *graph.Mutable, graphType string) (graph.Stats, graph.S
 
 func (d *RoomDAG) PrintMetrics() {
 	log.Info().Msg("***************************************************************")
+
 	log.Info().Msg("Event Metrics:")
 	for eventType, events := range d.eventsByType {
 		log.Info().Msg(fmt.Sprintf("%s: %d", eventType, len(events)))
 	}
+
 	log.Info().Msg("***************************************************************")
 
 	statsRoom, statsRoomTranspose := getGraphStats(d.roomMetrics.graph, "Room")
@@ -208,6 +210,7 @@ func (d *RoomDAG) PrintMetrics() {
 	statsState, statsStateTranspose := getGraphStats(d.stateMetrics.graph, "State")
 
 	log.Info().Msg("***************************************************************")
+
 	log.Info().Msg("DAG Metrics:")
 	log.Info().Msg(fmt.Sprintf("Room Events: %d", d.TotalEvents()))
 	log.Info().Msg(fmt.Sprintf("Auth Events: %d", d.authMetrics.size))
@@ -237,17 +240,6 @@ func (d *RoomDAG) PrintMetrics() {
 	log.Info().Msg(fmt.Sprintf("Auth Chain Size: %d, Max Depth: %d, Forks: %d", d.authChainMetrics.size, d.authChainMetrics.maxDepth, d.authChainMetrics.forks))
 	log.Info().Msg(fmt.Sprintf("State DAG Size: %d, Max Depth: %d, Forks: %d", d.stateMetrics.size, d.stateMetrics.maxDepth, d.stateMetrics.forks))
 	log.Info().Msg(fmt.Sprintf("Auth DAG Size: %d, Max Depth: %d, Forks: %d", d.authMetrics.size, d.authMetrics.maxDepth, d.authMetrics.forks))
-
-	// NOTE: uncomment this to see those events that aren't found when walking the roomDAG from the create event
-	//missingEvents := map[EventID]struct{}{}
-	//for id, event := range d.eventsByID {
-	//	if event.event != nil {
-	//		if _, ok := roomDAGSeenEvents[id]; !ok {
-	//			missingEvents[id] = struct{}{}
-	//		}
-	//	}
-	//}
-	//log.Warn().Msg(fmt.Sprintf("Missing Events: %v", missingEvents))
 
 	log.Info().Msg("***************************************************************")
 }
