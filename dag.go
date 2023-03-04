@@ -25,6 +25,16 @@ import (
 	"github.com/yourbasic/graph"
 )
 
+type GraphMetrics struct {
+	size       int
+	forks      int
+	seenEvents map[EventID]struct{}
+	depths     map[EventID]int
+	maxDepth   int
+	childCount map[int]int
+	graph      *graph.Mutable
+}
+
 type RoomDAG struct {
 	eventCount int
 
@@ -244,16 +254,6 @@ func (d *RoomDAG) addEvent(newEvent Event) error {
 	return nil
 }
 
-type GraphMetrics struct {
-	size       int
-	forks      int
-	seenEvents map[EventID]struct{}
-	depths     map[EventID]int
-	maxDepth   int
-	childCount map[int]int
-	graph      *graph.Mutable
-}
-
 type DAGTraversalMetrics struct {
 	size       int
 	forks      int
@@ -274,7 +274,7 @@ const (
 	AuthChainType
 )
 
-func GetEventTypeCheck(dagType DAGType) func(*EventNode) bool {
+func getEventTypeCheck(dagType DAGType) func(*EventNode) bool {
 	switch dagType {
 	case AuthDAGType:
 		return func(node *EventNode) bool { return node.isAuthEvent() }
@@ -317,7 +317,7 @@ func (d *RoomDAG) generateDAGMetrics(dagType DAGType) GraphMetrics {
 	eventCount := 0
 	maxDepth := 0
 	childCount := map[int]int{}
-	eventTypeCheck := GetEventTypeCheck(dagType)
+	eventTypeCheck := getEventTypeCheck(dagType)
 
 	for nodeID, node := range d.eventsByID {
 		if eventTypeCheck(node) {
