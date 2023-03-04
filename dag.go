@@ -73,89 +73,14 @@ func ParseDAGFromFile(filename string) (*RoomDAG, error) {
 		}
 	}
 
-	dag.roomMetrics = dag.GenerateDAGMetrics(RoomDAGType)
-	dag.authChainMetrics = dag.GenerateDAGMetrics(AuthChainType)
-	dag.GenerateDAG(AuthDAGType)
-	dag.authMetrics = dag.GenerateDAGMetrics(AuthDAGType)
-	dag.GenerateDAG(StateDAGType)
-	dag.stateMetrics = dag.GenerateDAGMetrics(StateDAGType)
+	dag.roomMetrics = dag.generateDAGMetrics(RoomDAGType)
+	dag.authChainMetrics = dag.generateDAGMetrics(AuthChainType)
+	dag.generateDAG(AuthDAGType)
+	dag.authMetrics = dag.generateDAGMetrics(AuthDAGType)
+	dag.generateDAG(StateDAGType)
+	dag.stateMetrics = dag.generateDAGMetrics(StateDAGType)
 
 	return &dag, nil
-}
-
-func (d *RoomDAG) addEvent(newEvent Event) error {
-	if foundEvent, ok := d.eventsByID[newEvent.EventID]; ok && foundEvent.event != nil {
-		return fmt.Errorf("Duplicate event ID detected in file: %s", newEvent.EventID)
-	}
-	if d.roomID != nil && *d.roomID != newEvent.RoomID {
-		return fmt.Errorf("Received event with different room ID. Expected: %s, Got: %s", *d.roomID, newEvent.RoomID)
-	}
-	if d.createEvent != nil && newEvent.Type == EVENT_TYPE_CREATE {
-		return fmt.Errorf("More than 1 create event present. %s & %s", d.createEvent.event.EventID, newEvent.EventID)
-	}
-	if d.roomID == nil {
-		d.roomID = &newEvent.RoomID
-	}
-
-	if _, ok := d.eventsByID[newEvent.EventID]; !ok {
-		newNode := newEventNode(&newEvent, d.eventCount)
-		d.eventCount += 1
-		d.eventsByID[newEvent.EventID] = &newNode
-	}
-	newNode := d.eventsByID[newEvent.EventID]
-	newNode.event = &newEvent
-
-	if newEvent.Type == EVENT_TYPE_CREATE {
-		d.createEvent = newNode
-	}
-
-	if events, ok := d.eventsByType[newEvent.Type]; ok {
-		d.eventsByType[newEvent.Type] = append(events, newNode)
-	} else {
-		d.eventsByType[newEvent.Type] = []*EventNode{newNode}
-	}
-
-	for _, authEventID := range newEvent.AuthEvents {
-		if _, ok := d.eventsByID[authEventID]; !ok {
-			// NOTE: add a placeholder event
-			newNode := newEventNode(nil, d.eventCount)
-			d.eventCount += 1
-			d.eventsByID[authEventID] = &newNode
-		}
-		authNode := d.eventsByID[authEventID]
-
-		// NOTE: Populate the auth chains for the room
-		if IsAuthEvent(newEvent.Type) {
-			if _, ok := authNode.authChainChildren[newEvent.EventID]; !ok {
-				authNode.authChainChildren[newEvent.EventID] = newNode
-			}
-		}
-
-		if _, ok := newNode.authChainParents[authEventID]; !ok {
-			newNode.authChainParents[authEventID] = authNode
-		}
-	}
-
-	for _, prevEventID := range newEvent.PrevEvents {
-		if _, ok := d.eventsByID[prevEventID]; !ok {
-			// NOTE: add a placeholder event
-			newNode := newEventNode(nil, d.eventCount)
-			d.eventCount += 1
-			d.eventsByID[prevEventID] = &newNode
-		}
-		prevNode := d.eventsByID[prevEventID]
-
-		// NOTE: Populate the room DAG
-		if _, ok := prevNode.roomChildren[newEvent.EventID]; !ok {
-			prevNode.roomChildren[newEvent.EventID] = newNode
-		}
-
-		if _, ok := newNode.roomParents[prevEventID]; !ok {
-			newNode.roomParents[prevEventID] = prevNode
-		}
-	}
-
-	return nil
 }
 
 func (d *RoomDAG) TotalEvents() int {
@@ -244,6 +169,81 @@ func (d *RoomDAG) PrintMetrics() {
 	log.Info().Msg("***************************************************************")
 }
 
+func (d *RoomDAG) addEvent(newEvent Event) error {
+	if foundEvent, ok := d.eventsByID[newEvent.EventID]; ok && foundEvent.event != nil {
+		return fmt.Errorf("Duplicate event ID detected in file: %s", newEvent.EventID)
+	}
+	if d.roomID != nil && *d.roomID != newEvent.RoomID {
+		return fmt.Errorf("Received event with different room ID. Expected: %s, Got: %s", *d.roomID, newEvent.RoomID)
+	}
+	if d.createEvent != nil && newEvent.Type == EVENT_TYPE_CREATE {
+		return fmt.Errorf("More than 1 create event present. %s & %s", d.createEvent.event.EventID, newEvent.EventID)
+	}
+	if d.roomID == nil {
+		d.roomID = &newEvent.RoomID
+	}
+
+	if _, ok := d.eventsByID[newEvent.EventID]; !ok {
+		newNode := newEventNode(&newEvent, d.eventCount)
+		d.eventCount += 1
+		d.eventsByID[newEvent.EventID] = &newNode
+	}
+	newNode := d.eventsByID[newEvent.EventID]
+	newNode.event = &newEvent
+
+	if newEvent.Type == EVENT_TYPE_CREATE {
+		d.createEvent = newNode
+	}
+
+	if events, ok := d.eventsByType[newEvent.Type]; ok {
+		d.eventsByType[newEvent.Type] = append(events, newNode)
+	} else {
+		d.eventsByType[newEvent.Type] = []*EventNode{newNode}
+	}
+
+	for _, authEventID := range newEvent.AuthEvents {
+		if _, ok := d.eventsByID[authEventID]; !ok {
+			// NOTE: add a placeholder event
+			newNode := newEventNode(nil, d.eventCount)
+			d.eventCount += 1
+			d.eventsByID[authEventID] = &newNode
+		}
+		authNode := d.eventsByID[authEventID]
+
+		// NOTE: Populate the auth chains for the room
+		if IsAuthEvent(newEvent.Type) {
+			if _, ok := authNode.authChainChildren[newEvent.EventID]; !ok {
+				authNode.authChainChildren[newEvent.EventID] = newNode
+			}
+		}
+
+		if _, ok := newNode.authChainParents[authEventID]; !ok {
+			newNode.authChainParents[authEventID] = authNode
+		}
+	}
+
+	for _, prevEventID := range newEvent.PrevEvents {
+		if _, ok := d.eventsByID[prevEventID]; !ok {
+			// NOTE: add a placeholder event
+			newNode := newEventNode(nil, d.eventCount)
+			d.eventCount += 1
+			d.eventsByID[prevEventID] = &newNode
+		}
+		prevNode := d.eventsByID[prevEventID]
+
+		// NOTE: Populate the room DAG
+		if _, ok := prevNode.roomChildren[newEvent.EventID]; !ok {
+			prevNode.roomChildren[newEvent.EventID] = newNode
+		}
+
+		if _, ok := newNode.roomParents[prevEventID]; !ok {
+			newNode.roomParents[prevEventID] = prevNode
+		}
+	}
+
+	return nil
+}
+
 type GraphMetrics struct {
 	size       int
 	forks      int
@@ -289,7 +289,7 @@ func GetEventTypeCheck(dagType DAGType) func(*EventNode) bool {
 	}
 }
 
-func (d *RoomDAG) GenerateDAG(dagType DAGType) {
+func (d *RoomDAG) generateDAG(dagType DAGType) {
 	generationMetrics := DAGGenerationMetrics{
 		seenEvents: map[EventID]struct{}{},
 	}
@@ -307,7 +307,7 @@ func (d *RoomDAG) GenerateDAG(dagType DAGType) {
 	}
 }
 
-func (d *RoomDAG) GenerateDAGMetrics(dagType DAGType) GraphMetrics {
+func (d *RoomDAG) generateDAGMetrics(dagType DAGType) GraphMetrics {
 	traversalMetrics := DAGTraversalMetrics{
 		size:       0,
 		forks:      0,
