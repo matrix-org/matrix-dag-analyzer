@@ -19,6 +19,7 @@ type EventNode struct {
 	roomIndex  int
 	authIndex  *int
 	stateIndex *int
+	powerIndex *int
 
 	roomChildren map[EventID]*EventNode
 	roomParents  map[EventID]*EventNode
@@ -27,6 +28,8 @@ type EventNode struct {
 	authChildren      map[EventID]*EventNode
 	authChainChildren map[EventID]*EventNode
 	authChainParents  map[EventID]*EventNode
+
+	powerChildren map[EventID]*EventNode
 }
 
 func newEventNode(event *Event, index int) EventNode {
@@ -41,6 +44,7 @@ func newEventNode(event *Event, index int) EventNode {
 		authChildren:      make(map[EventID]*EventNode),
 		authChainChildren: make(map[EventID]*EventNode),
 		authChainParents:  make(map[EventID]*EventNode),
+		powerChildren:     make(map[EventID]*EventNode),
 	}
 }
 
@@ -50,4 +54,8 @@ func (e *EventNode) isStateEvent() bool {
 
 func (e *EventNode) isAuthEvent() bool {
 	return e.event != nil && IsAuthEvent(e.event.Type)
+}
+
+func (e *EventNode) isPowerEvent() bool {
+	return e.event != nil && IsPowerEvent(e.event)
 }

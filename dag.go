@@ -35,6 +35,33 @@ type GraphMetrics struct {
 	graph      *graph.Mutable
 }
 
+// TODO: Create Power DAG
+// How? Just extract the power events from the State DAG
+// What are the power events?
+// m.room.create
+// m.room.power_levels
+// m.room.join_rules
+// m.room.member -> membership == leave || ban, sender != state_key
+// m.room.server_acl? I think this might be necessary as well
+// Start by unmarshalling the membership events so I can parse them
+
+// TODO: Create function to linearize Power DAG
+
+// TODO: Create State DAG off Power DAG
+// Will need to create a Power DAG mainline and link State events off it
+
+// TODO: Create Timeline DAG off Power DAG
+// Use the Power DAG mainline to link Timeline events off
+
+// TODO: Create Timeline DAG off State DAG?
+// Use the Power/State DAG mainline/s? to link Timeline events off
+
+// TODO: Create function to linearize Timeline DAG
+
+// TODO: Create AddEvent function which adds either a power/state/timeline event to the DAG
+
+// TODO: Create an AuthEvent function which checks a power/state/timeline event if it's allowed?
+
 type RoomDAG struct {
 	eventCount int
 
@@ -48,6 +75,8 @@ type RoomDAG struct {
 	authChainMetrics GraphMetrics
 	stateMetrics     GraphMetrics
 	authMetrics      GraphMetrics
+
+	powerMetrics GraphMetrics
 }
 
 func NewRoomDAG() RoomDAG {
@@ -77,6 +106,15 @@ func ParseDAGFromFile(filename string) (*RoomDAG, error) {
 			return nil, fmt.Errorf("Line %d: %w", lineNumber, err)
 		}
 
+		if event.Type == EVENT_TYPE_MEMBER {
+			var content MemberEventContent
+			err = json.Unmarshal(event.Content, &content)
+			if err != nil {
+				return nil, fmt.Errorf("Line %d: %w", lineNumber, err)
+			}
+			event.MembershipContent = &content
+		}
+
 		err = dag.addEvent(event)
 		if err != nil {
 			return nil, fmt.Errorf("Line %d: %w", lineNumber, err)
@@ -89,6 +127,9 @@ func ParseDAGFromFile(filename string) (*RoomDAG, error) {
 	dag.authMetrics = dag.generateDAGMetrics(AuthDAGType)
 	dag.generateDAG(StateDAGType)
 	dag.stateMetrics = dag.generateDAGMetrics(StateDAGType)
+
+	dag.generateDAG(PowerDAGType)
+	dag.powerMetrics = dag.generateDAGMetrics(PowerDAGType)
 
 	return &dag, nil
 }
@@ -175,6 +216,16 @@ func (d *RoomDAG) PrintMetrics() {
 	log.Info().Msg(fmt.Sprintf("Auth Chain Size: %d, Max Depth: %d, Forks: %d", d.authChainMetrics.size, d.authChainMetrics.maxDepth, d.authChainMetrics.forks))
 	log.Info().Msg(fmt.Sprintf("State DAG Size: %d, Max Depth: %d, Forks: %d", d.stateMetrics.size, d.stateMetrics.maxDepth, d.stateMetrics.forks))
 	log.Info().Msg(fmt.Sprintf("Auth DAG Size: %d, Max Depth: %d, Forks: %d", d.authMetrics.size, d.authMetrics.maxDepth, d.authMetrics.forks))
+
+	log.Info().Msg("***************************************************************")
+
+	log.Info().Msg(fmt.Sprintf("Power DAG: => m.room.{create, power_levels, join_rules, member.ban, member.leave}"))
+	statsPower, statsPowerTranspose := getGraphStats(d.powerMetrics.graph, "Power")
+	log.Info().Msg(fmt.Sprintf("Power DAG Edges: %d", statsPower.Size))
+	log.Info().Msg(fmt.Sprintf("Backward Extremities (Power DAG): %d", statsPowerTranspose.Isolated))
+	log.Info().Msg(fmt.Sprintf("Forward Extremities (Power DAG): %d", statsPower.Isolated))
+	log.Info().Msg(fmt.Sprintf("Power DAG Child Count [# of children: # of nodes]: %v", d.powerMetrics.childCount))
+	log.Info().Msg(fmt.Sprintf("Power DAG Size: %d, Max Depth: %d, Forks: %d", d.powerMetrics.size, d.powerMetrics.maxDepth, d.powerMetrics.forks))
 
 	log.Info().Msg("***************************************************************")
 }
@@ -272,6 +323,7 @@ const (
 	RoomDAGType
 	StateDAGType
 	AuthChainType
+	PowerDAGType
 )
 
 func getEventTypeCheck(dagType DAGType) func(*EventNode) bool {
@@ -284,6 +336,8 @@ func getEventTypeCheck(dagType DAGType) func(*EventNode) bool {
 		return func(node *EventNode) bool { return node.isStateEvent() }
 	case AuthChainType:
 		return func(node *EventNode) bool { return node.isAuthEvent() }
+	case PowerDAGType:
+		return func(node *EventNode) bool { return node.isPowerEvent() }
 	default:
 		panic(1)
 	}
@@ -303,6 +357,8 @@ func (d *RoomDAG) generateDAG(dagType DAGType) {
 		case StateDAGType:
 			generateStateDAG(nodeID, node, node, &queue, &generationMetrics)
 		case AuthChainType:
+		case PowerDAGType:
+			generatePowerDAG(nodeID, node, node, &queue, &generationMetrics)
 		}
 	}
 }
@@ -329,6 +385,8 @@ func (d *RoomDAG) generateDAGMetrics(dagType DAGType) GraphMetrics {
 				node.stateIndex = &index
 			case AuthChainType:
 				node.authIndex = &index
+			case PowerDAGType:
+				node.powerIndex = &index
 			}
 			eventCount += 1
 			traversalMetrics.depths[nodeID] = 0
@@ -345,6 +403,8 @@ func (d *RoomDAG) generateDAGMetrics(dagType DAGType) GraphMetrics {
 				traverseRoomDAG(nodeID, node, &traversalMetrics)
 			case StateDAGType:
 				traverseStateDAG(node, &traversalMetrics)
+			case PowerDAGType:
+				traversePowerDAG(node, &traversalMetrics)
 			}
 		}
 	}
@@ -372,6 +432,9 @@ func (d *RoomDAG) generateDAGMetrics(dagType DAGType) GraphMetrics {
 			case AuthChainType:
 				children = node.authChainChildren
 				nodeIndex = node.authIndex
+			case PowerDAGType:
+				children = node.powerChildren
+				nodeIndex = node.powerIndex
 			}
 
 			for _, child := range children {
@@ -385,6 +448,8 @@ func (d *RoomDAG) generateDAGMetrics(dagType DAGType) GraphMetrics {
 					childIndex = child.stateIndex
 				case AuthChainType:
 					childIndex = child.authIndex
+				case PowerDAGType:
+					childIndex = child.powerIndex
 				}
 				graph.Add(*nodeIndex, *childIndex)
 			}

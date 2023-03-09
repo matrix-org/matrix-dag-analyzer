@@ -19,6 +19,7 @@ type EventEnumType int64
 const (
 	AuthEvent EventEnumType = iota
 	StateEvent
+	PowerEvent
 )
 
 type EventQueue struct {
@@ -50,6 +51,10 @@ func (e *EventQueue) AddChild(eventID EventID, event *EventNode, eventType Event
 			if _, ok := queueEvent.stateChildren[eventID]; !ok {
 				queueEvent.stateChildren[eventID] = event
 			}
+		case PowerEvent:
+			if _, ok := queueEvent.powerChildren[eventID]; !ok {
+				queueEvent.powerChildren[eventID] = event
+			}
 		}
 	}
 }
@@ -67,6 +72,12 @@ func (e *EventQueue) AddChildrenFromNode(event *EventNode, eventType EventEnumTy
 			for childID, child := range event.stateChildren {
 				if _, ok := queueEvent.stateChildren[childID]; !ok {
 					queueEvent.stateChildren[childID] = child
+				}
+			}
+		case PowerEvent:
+			for childID, child := range event.powerChildren {
+				if _, ok := queueEvent.powerChildren[childID]; !ok {
+					queueEvent.powerChildren[childID] = child
 				}
 			}
 		}

@@ -34,26 +34,56 @@ func IsAuthEvent(eventType EventType) bool {
 	return ok
 }
 
+func IsPowerEvent(event *Event) bool {
+	isPowerEventType := event.Type == EVENT_TYPE_CREATE ||
+		event.Type == EVENT_TYPE_POWER_LEVELS ||
+		event.Type == EVENT_TYPE_JOIN_RULES ||
+		event.Type == EVENT_TYPE_MEMBER
+	memberIsPower := false
+	if event.Type == EVENT_TYPE_MEMBER {
+		if content := event.MembershipContent; content != nil && event.StateKey != nil {
+			if content.Membership == "ban" || (content.Membership == "leave" && event.Sender != *event.StateKey) {
+				memberIsPower = true
+			}
+		}
+	} else {
+		memberIsPower = true
+	}
+
+	return isPowerEventType && memberIsPower
+}
+
 type EventID = string
 
 type EventType = string
 
 type Event struct {
-	EventID     string   `json:"_event_id"`
-	RoomVersion string   `json:"_room_version"`
-	AuthEvents  []string `json:"auth_events"`
-	Content     RawJSON  `json:"content"`
-	Depth       int64    `json:"depth"`
-	Hashes      RawJSON  `json:"hashes"`
-	OriginTS    int64    `json:"origin_server_ts"`
-	PrevEvents  []string `json:"prev_events"`
-	Redacts     *string  `json:"redacts,omitempty"`
-	RoomID      string   `json:"room_id"`
-	Sender      string   `json:"sender"`
-	Signatures  RawJSON  `json:"signatures,omitempty"`
-	StateKey    *string  `json:"state_key,omitempty"`
-	Type        string   `json:"type"`
-	Unsigned    RawJSON  `json:"unsigned,omitempty"`
+	EventID           string   `json:"_event_id"`
+	RoomVersion       string   `json:"_room_version"`
+	AuthEvents        []string `json:"auth_events"`
+	Content           RawJSON  `json:"content"`
+	Depth             int64    `json:"depth"`
+	Hashes            RawJSON  `json:"hashes"`
+	OriginTS          int64    `json:"origin_server_ts"`
+	PrevEvents        []string `json:"prev_events"`
+	Redacts           *string  `json:"redacts,omitempty"`
+	RoomID            string   `json:"room_id"`
+	Sender            string   `json:"sender"`
+	Signatures        RawJSON  `json:"signatures,omitempty"`
+	StateKey          *string  `json:"state_key,omitempty"`
+	Type              string   `json:"type"`
+	Unsigned          RawJSON  `json:"unsigned,omitempty"`
+	MembershipContent *MemberEventContent
+}
+
+type MemberEventContent struct {
+	Membership                   string   `json:"membership"`
+	AvatarURL                    *string  `json:"avatar_url,omitempty"`
+	DisplayName                  *string  `json:"displayname,omitempty"`
+	IsDirect                     *bool    `json:"is_direct,omitempty"`
+	JoinAuthorisedViaUsersServer *string  `json:"join_authorised_via_users_server,omitempty"`
+	Reason                       *string  `json:"reason,omitempty"`
+	ThirdPartyInvite             *RawJSON `json:"third_party_invite,omitempty"`
 }
 
 type RawJSON []byte

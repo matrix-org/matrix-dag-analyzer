@@ -65,6 +65,30 @@ func generateAuthDAG(eventID EventID, event *EventNode, origin *EventNode, queue
 	queue.Pop()
 }
 
+func generatePowerDAG(eventID EventID, event *EventNode, origin *EventNode, queue *EventQueue, metrics *DAGGenerationMetrics) {
+	metrics.seenEvents[eventID] = struct{}{}
+
+	if event != origin && event.isPowerEvent() {
+		queue.AddChild(eventID, event, PowerEvent)
+		return
+	}
+
+	queue.Push(event)
+	for childID, child := range event.roomChildren {
+		// Only traverse children we haven't already seen
+		if _, ok := metrics.seenEvents[childID]; !ok {
+			generatePowerDAG(childID, child, origin, queue, metrics)
+		} else {
+			if child.isPowerEvent() {
+				queue.AddChild(childID, child, PowerEvent)
+			} else {
+				queue.AddChildrenFromNode(child, PowerEvent)
+			}
+		}
+	}
+	queue.Pop()
+}
+
 // TODO: Refactor these common functions
 func traverseRoomDAG(eventID EventID, event *EventNode, metrics *DAGTraversalMetrics) {
 	if _, ok := metrics.seenEvents[eventID]; !ok {
@@ -145,6 +169,28 @@ func traverseAuthDAG(event *EventNode, metrics *DAGTraversalMetrics) {
 		// Only traverse children we haven't already seen
 		if _, ok := metrics.seenEvents[childID]; !ok {
 			traverseAuthDAG(child, metrics)
+		}
+
+		metrics.depths[event.event.EventID] = int(math.Max(
+			float64(metrics.depths[event.event.EventID]),
+			float64(1+metrics.depths[childID]),
+		))
+	}
+}
+
+func traversePowerDAG(event *EventNode, metrics *DAGTraversalMetrics) {
+	if _, ok := metrics.seenEvents[event.event.EventID]; !ok {
+		metrics.size += 1
+		metrics.seenEvents[event.event.EventID] = struct{}{}
+		if len(event.powerChildren) > 1 {
+			metrics.forks += 1
+		}
+	}
+
+	for childID, child := range event.powerChildren {
+		// Only traverse children we haven't already seen
+		if _, ok := metrics.seenEvents[childID]; !ok {
+			traversePowerDAG(child, metrics)
 		}
 
 		metrics.depths[event.event.EventID] = int(math.Max(
