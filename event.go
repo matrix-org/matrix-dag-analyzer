@@ -74,6 +74,7 @@ type Event struct {
 	Type              string   `json:"type"`
 	Unsigned          RawJSON  `json:"unsigned,omitempty"`
 	MembershipContent *MemberEventContent
+	CreateContent     *CreateEventContent
 }
 
 type MemberEventContent struct {
@@ -84,6 +85,19 @@ type MemberEventContent struct {
 	JoinAuthorisedViaUsersServer *string  `json:"join_authorised_via_users_server,omitempty"`
 	Reason                       *string  `json:"reason,omitempty"`
 	ThirdPartyInvite             *RawJSON `json:"third_party_invite,omitempty"`
+}
+
+type PreviousRoom struct {
+	EventID string `json:"event_id"`
+	RoomID  string `json:"room_id"`
+}
+
+type CreateEventContent struct {
+	Creator     string       `json:"creator"`
+	Federate    *bool        `json:"m.federate,omitempty"`
+	Predecessor PreviousRoom `json:"predecessor,omitempty"`
+	RoomVersion string       `json:"room_version,omitempty"`
+	Type        string       `json:"type,omitempty"`
 }
 
 type RawJSON []byte

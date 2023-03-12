@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"sort"
 
 	"github.com/rs/zerolog/log"
 	"github.com/yourbasic/graph"
@@ -34,16 +35,6 @@ type GraphMetrics struct {
 	childCount map[int]int
 	graph      *graph.Mutable
 }
-
-// TODO: Create Power DAG
-// How? Just extract the power events from the State DAG
-// What are the power events?
-// m.room.create
-// m.room.power_levels
-// m.room.join_rules
-// m.room.member -> membership == leave || ban, sender != state_key
-// m.room.server_acl? I think this might be necessary as well
-// Start by unmarshalling the membership events so I can parse them
 
 // TODO: Create function to linearize Power DAG
 
@@ -106,7 +97,15 @@ func ParseDAGFromFile(filename string) (*RoomDAG, error) {
 			return nil, fmt.Errorf("Line %d: %w", lineNumber, err)
 		}
 
-		if event.Type == EVENT_TYPE_MEMBER {
+		switch event.Type {
+		case EVENT_TYPE_CREATE:
+			var content CreateEventContent
+			err = json.Unmarshal(event.Content, &content)
+			if err != nil {
+				return nil, fmt.Errorf("Line %d: %w", lineNumber, err)
+			}
+			event.CreateContent = &content
+		case EVENT_TYPE_MEMBER:
 			var content MemberEventContent
 			err = json.Unmarshal(event.Content, &content)
 			if err != nil {
@@ -131,7 +130,174 @@ func ParseDAGFromFile(filename string) (*RoomDAG, error) {
 	dag.generateDAG(PowerDAGType)
 	dag.powerMetrics = dag.generateDAGMetrics(PowerDAGType)
 
+	linearPowerDAG := dag.linearizePowerDAG()
+	eventLine := []EventID{}
+	for _, event := range linearPowerDAG {
+		eventLine = append(eventLine, event.event.EventID)
+	}
+	log.Info().Msg(fmt.Sprintf("Linear Power DAG: %v", eventLine))
+
 	return &dag, nil
+}
+
+const DefaultPowerLevel = 0
+
+func (d *RoomDAG) linearizePowerDAG() []*EventNode {
+	// NOTE: The create event should always be first
+	linearPowerDAG := []*EventNode{}
+	incomingEdges := map[EventID]int{}
+	outgoingEdges := map[EventID][]EventID{}
+	for eventID, event := range d.eventsByID {
+		if event.isPowerEvent() {
+			// TODO: What is the difference in linearizing from top->bottom vs. bottom->top?
+			// For one, any dangling backward extremities will be sorted differently
+			// Also forward extremities are sorted differently
+
+			// TODO: How do you obtain the current power level for a sender?
+			// You would need to keep track of it changing over time for proper sorting.
+
+			// TODO: Does this sorting make sense for power events?
+			// ie. if bob's power level changes in a forward extremity, should that be considered
+			// for top->bottom sorting, or bottom->top sorting? This could result in bob's power
+			// level being different depending on the sorting algorithm...
+			// Does this problem still in today's State DAG? All the extra state does is probably
+			// make it less likely?
+
+			incomingEdges[eventID] = len(event.powerChildren)
+			for childID := range event.powerChildren {
+				if _, ok := outgoingEdges[childID]; !ok {
+					outgoingEdges[childID] = []EventID{}
+				}
+				outgoingEdges[childID] = append(outgoingEdges[childID], eventID)
+			}
+		}
+	}
+
+	// TODO: What I should actually do to maintain consistency:
+	// Do kahn's algoritm backward as described (bottom->top)
+	// At each step, if more than 1 event, postpone sorting until later
+	// After I have a "sorted" list of lists, then go through from the start, applying
+	// power levels as I go, and sort the remainder of the list
+	// This keeps the semantics the same as they are now (maybe?) where we keep the forward extremities
+	// at the end of the linearized DAG
+
+	tempEventLine := [][]EventID{}
+
+	nextEvents := []EventID{}
+	for eventID, edgeCount := range incomingEdges {
+		if edgeCount == 0 {
+			nextEvents = append(nextEvents, eventID)
+		}
+	}
+
+	for {
+		if len(nextEvents) == 0 {
+			break
+		}
+
+		tempEventLine = append(tempEventLine, nextEvents)
+
+		for _, nextID := range nextEvents {
+			for _, eventID := range outgoingEdges[nextID] {
+				incomingEdges[eventID] -= 1
+			}
+			delete(incomingEdges, nextID)
+		}
+
+		nextEvents = []EventID{}
+		for eventID, edgeCount := range incomingEdges {
+			if edgeCount == 0 {
+				nextEvents = append(nextEvents, eventID)
+			}
+		}
+	}
+
+	// NOTE: Reverse list so create event is first
+	for i, j := 0, len(tempEventLine)-1; i < j; i, j = i+1, j-1 {
+		tempEventLine[i], tempEventLine[j] = tempEventLine[j], tempEventLine[i]
+	}
+
+	// TODO: Sort sublists
+	// TODO: How do we handle power levels if the create event refers to an older version of the room?
+
+	// NOTE: From the create event until power levels are changed, the following rule applies:
+	// "If the room contains no `m.room.power_levels` event, the room's creator has a power level of
+	// 100, and all other users have a power level of 0."
+
+	//creator := UserID(d.createEvent.event.CreateContent.Creator)
+	//currentPowerLevels := map[UserID]PowerLevel{creator: 100}
+
+	for _, events := range tempEventLine {
+		if len(events) == 1 {
+			linearPowerDAG = append(linearPowerDAG, d.eventsByID[events[0]])
+		} else {
+			// TODO: Remove this after sorting sublists
+			log.Error().Msg(fmt.Sprintf("Unsorted power events not being added to linear power DAG! Count: %d", len(events)))
+		}
+	}
+
+	if linearPowerDAG[0] != d.createEvent {
+		log.Panic().Msg(fmt.Sprintf("First event in linear power DAG (%s) is not create event (%s)", linearPowerDAG[0].event.EventID, d.createEvent.event.EventID))
+	}
+
+	return linearPowerDAG
+}
+
+type UserID string
+type PowerLevel int
+
+func (d *RoomDAG) sortPowerline(events []EventID, powerLevels map[UserID]PowerLevel) []EventID {
+	if len(events) <= 1 {
+		// Nothing to sort
+		return events
+	}
+
+	orderedEvents := events
+
+	sort.Slice(orderedEvents, func(i, j int) bool {
+		eventI := d.eventsByID[orderedEvents[i]]
+		eventJ := d.eventsByID[orderedEvents[j]]
+
+		powerLevelI := PowerLevel(0)
+		powerLevelJ := PowerLevel(0)
+		if level, ok := powerLevels[UserID(eventI.event.EventID)]; ok {
+			powerLevelI = level
+		}
+		if level, ok := powerLevels[UserID(eventJ.event.EventID)]; ok {
+			powerLevelJ = level
+		}
+
+		if powerLevelI > powerLevelJ {
+			return true
+		} else if powerLevelI < powerLevelJ {
+			return false
+		}
+
+		if eventI.event.OriginTS < eventJ.event.OriginTS {
+			return true
+		} else if eventI.event.OriginTS > eventJ.event.OriginTS {
+			return false
+		}
+
+		if eventI.event.EventID < eventJ.event.EventID {
+			return true
+		} else {
+			return false
+		}
+	})
+
+	return orderedEvents
+}
+
+func (d *RoomDAG) calculateNewPowerLevels(events []EventID, powerLevels map[UserID]PowerLevel) map[UserID]PowerLevel {
+	newPowerLevels := powerLevels
+
+	// TODO: this
+	//for _, eventID := range events {
+
+	//}
+
+	return newPowerLevels
 }
 
 func (d *RoomDAG) TotalEvents() int {
