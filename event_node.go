@@ -29,7 +29,26 @@ type EventNode struct {
 	authChainChildren map[EventID]*EventNode
 	authChainParents  map[EventID]*EventNode
 
-	powerChildren map[EventID]*EventNode
+	powerChildren    map[EventID]*EventNode
+	linearPowerIndex *int
+}
+
+type StateEventNode *EventNode
+type PowerEventNode *EventNode
+type TimelineEventNode *EventNode
+
+type StateEventLinks struct {
+	PrevPowerEvent  *PowerEventNode
+	PrevStateEvents []*StateEventNode
+}
+
+type PowerEventLinks struct {
+	PrevPowerEvent *PowerEventNode
+}
+
+type TimelineEventLinks struct {
+	PrevPowerEvent     *PowerEventNode
+	PrevTimelineEvents []*TimelineEventNode
 }
 
 func newEventNode(event *Event, index int) EventNode {
@@ -58,4 +77,8 @@ func (e *EventNode) isAuthEvent() bool {
 
 func (e *EventNode) isPowerEvent() bool {
 	return e.event != nil && IsPowerEvent(e.event)
+}
+
+func (e *EventNode) isNewStateEvent() bool {
+	return e.isStateEvent() && !e.isPowerEvent()
 }

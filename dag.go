@@ -36,13 +36,17 @@ type GraphMetrics struct {
 	graph      *graph.Mutable
 }
 
-// TODO: Create function to linearize Power DAG
-
 // TODO: Create State DAG off Power DAG
 // Will need to create a Power DAG mainline and link State events off it
+// Find the latest power event in the each state event's auth chain
+// Then create lists of State events per power event.
+// Then can linearize state events off of that
 
 // TODO: Create Timeline DAG off Power DAG
 // Use the Power DAG mainline to link Timeline events off
+// Find the latest power event in the each timeline event's auth chain
+// Then create lists of timeline events per power event.
+// Then can linearize timeline events off of that
 
 // TODO: Create Timeline DAG off State DAG?
 // Use the Power/State DAG mainline/s? to link Timeline events off
@@ -52,6 +56,19 @@ type GraphMetrics struct {
 // TODO: Create AddEvent function which adds either a power/state/timeline event to the DAG
 
 // TODO: Create an AuthEvent function which checks a power/state/timeline event if it's allowed?
+
+// NOTE: All new events have a prev_power_event
+// NOTE: New Power events only have a prev_power_event
+// NOTE: New State events have a prev_state_event
+// NOTE: New Timeline events have a prev_timeline_event
+
+// NOTE: Can convert historical Room DAGs into new Power Event DAGs + State/Timeline DAGs
+// NOTE: Should be backwards compatible, ie. servers not doing the new DAG stuff can still
+// participate with conversion. But Room Versions should remove this problem anyway.
+// NOTE: Power DAGs can be kept really small. All power DAG events need to be synced between servers.
+// NOTE: State & Timeline DAGs don't rely on each other and both build off the Power DAG.
+// NOTE: Might want to modify the member events to extract power events into their own type to
+// make the logic & processing clearer & easier.
 
 type RoomDAG struct {
 	eventCount int
@@ -130,12 +147,20 @@ func ParseDAGFromFile(filename string) (*RoomDAG, error) {
 	dag.generateDAG(PowerDAGType)
 	dag.powerMetrics = dag.generateDAGMetrics(PowerDAGType)
 
+	// Traverse State DAG
+	// Create New State DAG using isNewStateEvent()
+	// Use that info to obtain the prev_state_events for each new state event
+	// The prev_power_event for each new state event is obtained from the power event mainline
+	// Use the same technique to generate prev_timeline_events & prev_power_event for each timeline event
+
 	linearPowerDAG := dag.linearizePowerDAG()
 	eventLine := []EventID{}
 	for _, event := range linearPowerDAG {
 		eventLine = append(eventLine, event.event.EventID)
 	}
 	log.Info().Msg(fmt.Sprintf("Linear Power DAG: %v", eventLine))
+	newStateDAG := dag.linearizeStateDAG()
+	log.Info().Msg(fmt.Sprintf("Size of Linear State DAG: %v", len(newStateDAG)))
 
 	return &dag, nil
 }
@@ -227,9 +252,11 @@ func (d *RoomDAG) linearizePowerDAG() []*EventNode {
 	//creator := UserID(d.createEvent.event.CreateContent.Creator)
 	//currentPowerLevels := map[UserID]PowerLevel{creator: 100}
 
-	for _, events := range tempEventLine {
+	for i, events := range tempEventLine {
 		if len(events) == 1 {
 			linearPowerDAG = append(linearPowerDAG, d.eventsByID[events[0]])
+			linearIndex := i
+			d.eventsByID[events[0]].linearPowerIndex = &linearIndex
 		} else {
 			// TODO: Remove this after sorting sublists
 			log.Error().Msg(fmt.Sprintf("Unsorted power events not being added to linear power DAG! Count: %d", len(events)))
@@ -298,6 +325,64 @@ func (d *RoomDAG) calculateNewPowerLevels(events []EventID, powerLevels map[User
 	//}
 
 	return newPowerLevels
+}
+
+func (d *RoomDAG) linearizeStateDAG() []*EventNode {
+	// NOTE: This map contains info for the new Auth Chains of State Events
+	mostRecentPowerEvent := map[EventID][]*EventNode{} // PowerEvent : []StateEvents
+	linearizedStateDAG := []*EventNode{}               // []StateEvents
+	for _, event := range d.eventsByID {
+		if event.isNewStateEvent() {
+			nextAuthEvents := []EventIDNode{}
+			for parentID, parentEvent := range event.authChainParents {
+				nextAuthEvents = append(nextAuthEvents, EventIDNode{parentID, parentEvent})
+			}
+			latestPowerEvent := d.findLatestPowerEvent(nextAuthEvents)
+			if _, ok := mostRecentPowerEvent[latestPowerEvent.ID]; !ok {
+				mostRecentPowerEvent[latestPowerEvent.ID] = []*EventNode{}
+			}
+			mostRecentPowerEvent[latestPowerEvent.ID] = append(mostRecentPowerEvent[latestPowerEvent.ID], event)
+		}
+	}
+
+	// TODO: Sort linearized state sublists from mostRecentPowerEvent
+
+	return linearizedStateDAG
+}
+
+type EventIDNode struct {
+	ID   EventID
+	Node *EventNode
+}
+
+func (d *RoomDAG) findLatestPowerEvent(authEvents []EventIDNode) EventIDNode {
+	var latestPowerEvent EventIDNode
+	latestIndex := 0
+	found := false
+	for _, authEvent := range authEvents {
+		if index := d.eventsByID[authEvent.ID].linearPowerIndex; index != nil {
+			found = true
+			if *index > latestIndex {
+				latestIndex = *index
+				latestPowerEvent = authEvent
+			}
+		}
+	}
+	if !found {
+		nextAuthEvents := []EventIDNode{}
+		for _, authEvent := range authEvents {
+			if authEvent.Node == nil {
+				continue
+			}
+
+			for parentID, parentEvent := range authEvent.Node.authChainParents {
+				nextAuthEvents = append(nextAuthEvents, EventIDNode{parentID, parentEvent})
+			}
+		}
+		latestPowerEvent = d.findLatestPowerEvent(nextAuthEvents)
+	}
+
+	return latestPowerEvent
 }
 
 func (d *RoomDAG) TotalEvents() int {
