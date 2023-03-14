@@ -15,11 +15,12 @@
 package analyzer
 
 type EventNode struct {
-	event      *Event
-	roomIndex  int
-	authIndex  *int
-	stateIndex *int
-	powerIndex *int
+	event             *Event
+	experimentalEvent *ExperimentalEvent
+	roomIndex         int
+	authIndex         *int
+	stateIndex        *int
+	powerIndex        *int
 
 	roomChildren map[EventID]*EventNode
 	roomParents  map[EventID]*EventNode
@@ -30,6 +31,7 @@ type EventNode struct {
 	authChainParents  map[EventID]*EventNode
 
 	powerChildren    map[EventID]*EventNode
+	powerParents     map[EventID]*EventNode
 	linearPowerIndex *int
 }
 
@@ -64,6 +66,7 @@ func newEventNode(event *Event, index int) EventNode {
 		authChainChildren: make(map[EventID]*EventNode),
 		authChainParents:  make(map[EventID]*EventNode),
 		powerChildren:     make(map[EventID]*EventNode),
+		powerParents:      make(map[EventID]*EventNode),
 	}
 }
 

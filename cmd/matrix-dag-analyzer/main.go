@@ -33,18 +33,27 @@ func main() {
 	})
 
 	var filePath string
+	var outputFilePath string
 	flag.StringVar(&filePath, "p", "", "Specify dag file name with path")
+	flag.StringVar(&outputFilePath, "o", "", "Specify output power DAG file name with path")
 	flag.Parse()
 
-	if len(filePath) < 1 {
+	if len(filePath) < 2 {
 		log.Error().
 			Err(errors.New("Invalid file path specified")).
 			Msg("")
 		flag.Usage()
 		return
 	}
+	if len(outputFilePath) < 2 {
+		log.Error().
+			Err(errors.New("Invalid output file path specified")).
+			Msg("")
+		flag.Usage()
+		return
+	}
 
-	dag, err := analyzer.ParseDAGFromFile(filePath)
+	dag, err := analyzer.ParseDAGFromFile(filePath, outputFilePath)
 	if err != nil {
 		log.Error().Err(err).Msg("failed parsing file")
 		return
@@ -63,4 +72,6 @@ func main() {
 			Msg("The number of events in the file does not match the number of events referenced in the file")
 	}
 	dag.PrintMetrics()
+
+	// TODO: Create new `Power Events` & write to json file
 }

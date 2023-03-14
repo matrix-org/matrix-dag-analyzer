@@ -97,7 +97,7 @@ func NewRoomDAG() RoomDAG {
 	}
 }
 
-func ParseDAGFromFile(filename string) (*RoomDAG, error) {
+func ParseDAGFromFile(filename string, outputFilename string) (*RoomDAG, error) {
 	file, err := os.Open(filename)
 	if err != nil {
 		return nil, err
@@ -106,6 +106,8 @@ func ParseDAGFromFile(filename string) (*RoomDAG, error) {
 	dag := NewRoomDAG()
 	scanner := bufio.NewScanner(file)
 	lineNumber := 0
+	signedJoins := 0
+	joins := 0
 	for scanner.Scan() {
 		lineNumber = lineNumber + 1
 		var event Event
@@ -128,6 +130,10 @@ func ParseDAGFromFile(filename string) (*RoomDAG, error) {
 			if err != nil {
 				return nil, fmt.Errorf("Line %d: %w", lineNumber, err)
 			}
+			joins++
+			if content.JoinAuthorisedViaUsersServer != nil {
+				signedJoins++
+			}
 			event.MembershipContent = &content
 		}
 
@@ -136,6 +142,8 @@ func ParseDAGFromFile(filename string) (*RoomDAG, error) {
 			return nil, fmt.Errorf("Line %d: %w", lineNumber, err)
 		}
 	}
+	println("Joins: ", joins)
+	println("Signed Joins: ", signedJoins)
 
 	dag.roomMetrics = dag.generateDAGMetrics(RoomDAGType)
 	dag.authChainMetrics = dag.generateDAGMetrics(AuthChainType)
@@ -143,10 +151,10 @@ func ParseDAGFromFile(filename string) (*RoomDAG, error) {
 	dag.authMetrics = dag.generateDAGMetrics(AuthDAGType)
 	dag.generateDAG(StateDAGType)
 	dag.stateMetrics = dag.generateDAGMetrics(StateDAGType)
-
 	dag.generateDAG(PowerDAGType)
 	dag.powerMetrics = dag.generateDAGMetrics(PowerDAGType)
 
+	// NOTE: To generate New State DAG
 	// Traverse State DAG
 	// Create New State DAG using isNewStateEvent()
 	// Use that info to obtain the prev_state_events for each new state event
@@ -161,6 +169,64 @@ func ParseDAGFromFile(filename string) (*RoomDAG, error) {
 	log.Info().Msg(fmt.Sprintf("Linear Power DAG: %v", eventLine))
 	newStateDAG := dag.linearizeStateDAG()
 	log.Info().Msg(fmt.Sprintf("Size of Linear State DAG: %v", len(newStateDAG)))
+
+	// NOTE: Generate power DAG parent events
+	for eventID, event := range dag.eventsByID {
+		if !event.isPowerEvent() {
+			continue
+		}
+		for _, child := range event.powerChildren {
+			child.powerParents[eventID] = event
+		}
+	}
+
+	// NOTE: Generate new experimental events for each event
+	newEventsFile, err := os.Create(outputFilename)
+	if err != nil {
+		return nil, err
+	}
+	for _, event := range dag.eventsByID {
+		if event.event != nil {
+			oldEvent := event.event
+			prevEvents := []string{}
+			for parentID := range event.powerParents {
+				prevEvents = append(prevEvents, parentID)
+			}
+
+			event.experimentalEvent = &ExperimentalEvent{
+				EventID:     oldEvent.EventID,
+				RoomVersion: oldEvent.RoomVersion,
+				AuthEvents:  []string{},
+				Content:     oldEvent.Content,
+				Depth:       oldEvent.Depth, // TODO: what should this be now?
+				Hashes:      oldEvent.Hashes,
+				OriginTS:    oldEvent.OriginTS,
+				PrevEvents:  prevEvents,
+				Redacts:     oldEvent.Redacts,
+				RoomID:      oldEvent.RoomID,
+				Sender:      oldEvent.Sender,
+				Signatures:  oldEvent.Signatures,
+				StateKey:    oldEvent.StateKey,
+				Type:        oldEvent.Type,
+				Unsigned:    oldEvent.Unsigned,
+			}
+
+			if event.isPowerEvent() {
+				experimentalEventJSON, err := json.Marshal(event.experimentalEvent)
+				if err != nil {
+					log.Err(err).Msg("Failed marshalling experimental event")
+					return nil, err
+				}
+				experimentalEventJSON = append(experimentalEventJSON, '\n')
+				_, err = newEventsFile.Write(experimentalEventJSON)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+
+	// TODO: Stretch - add state & timeline events off the power DAG
 
 	return &dag, nil
 }

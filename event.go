@@ -38,11 +38,15 @@ func IsPowerEvent(event *Event) bool {
 	isPowerEventType := event.Type == EVENT_TYPE_CREATE ||
 		event.Type == EVENT_TYPE_POWER_LEVELS ||
 		event.Type == EVENT_TYPE_JOIN_RULES ||
+		event.Type == EVENT_TYPE_THIRD_PARTY_INVITE ||
 		event.Type == EVENT_TYPE_MEMBER
 	memberIsPower := false
 	if event.Type == EVENT_TYPE_MEMBER {
 		if content := event.MembershipContent; content != nil && event.StateKey != nil {
-			if content.Membership == "ban" || (content.Membership == "leave" && event.Sender != *event.StateKey) {
+			if content.Membership == "ban" ||
+				content.Membership == "invite" ||
+				(content.Membership == "join" && content.JoinAuthorisedViaUsersServer != nil) ||
+				(content.Membership == "leave" && event.Sender != *event.StateKey) {
 				memberIsPower = true
 			}
 		}
@@ -75,6 +79,24 @@ type Event struct {
 	Unsigned          RawJSON  `json:"unsigned,omitempty"`
 	MembershipContent *MemberEventContent
 	CreateContent     *CreateEventContent
+}
+
+type ExperimentalEvent struct {
+	EventID     string   `json:"_event_id"`
+	RoomVersion string   `json:"_room_version"`
+	AuthEvents  []string `json:"auth_events"`
+	Content     RawJSON  `json:"content"`
+	Depth       int64    `json:"depth"`
+	Hashes      RawJSON  `json:"hashes"`
+	OriginTS    int64    `json:"origin_server_ts"`
+	PrevEvents  []string `json:"prev_events"`
+	Redacts     *string  `json:"redacts,omitempty"`
+	RoomID      string   `json:"room_id"`
+	Sender      string   `json:"sender"`
+	Signatures  RawJSON  `json:"signatures,omitempty"`
+	StateKey    *string  `json:"state_key,omitempty"`
+	Type        string   `json:"type"`
+	Unsigned    RawJSON  `json:"unsigned,omitempty"`
 }
 
 type MemberEventContent struct {
