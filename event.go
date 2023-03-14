@@ -39,6 +39,7 @@ func IsPowerEvent(event *Event) bool {
 		event.Type == EVENT_TYPE_POWER_LEVELS ||
 		event.Type == EVENT_TYPE_JOIN_RULES ||
 		event.Type == EVENT_TYPE_THIRD_PARTY_INVITE ||
+		event.Type == EVENT_TYPE_SERVER_ACL ||
 		event.Type == EVENT_TYPE_MEMBER
 	memberIsPower := false
 	if event.Type == EVENT_TYPE_MEMBER {
