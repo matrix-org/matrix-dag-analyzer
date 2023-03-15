@@ -162,8 +162,7 @@ func ParseDAGFromFile(filename string, outputFilename string) (*RoomDAG, error) 
 	}
 
 	dag.createLinearizedPowerDAG()
-	// TODO: Generate new state DAG off power DAG
-	//newStateDAG := dag.linearizeStateDAG()
+	dag.linearizeStateAndTimelineDAG()
 
 	return &dag, nil
 }
@@ -255,11 +254,6 @@ func (d *RoomDAG) generatePowerDAGJSON() error {
 }
 
 const DefaultPowerLevel = 0
-
-// TODO: Connect state/timeline events to branches off the power DAG
-// 1. linearizePowerDAG
-// 2. For each non-power event, find the most recent power event by recursing up it's auth chain nodes
-// 3. Add that event as the non-power event's power event reference
 
 func (d *RoomDAG) createLinearizedPowerDAG() {
 	// NOTE: The create event should always be first
@@ -419,12 +413,12 @@ func (d *RoomDAG) calculateNewPowerLevels(event *EventNode, powerLevels PowerLev
 	return newPowerLevels
 }
 
-func (d *RoomDAG) linearizeStateDAG() []*EventNode {
+func (d *RoomDAG) linearizeStateAndTimelineDAG() []*EventNode {
 	// NOTE: This map contains info for the new Auth Chains of State Events
-	mostRecentPowerEvent := map[EventID][]*EventNode{} // PowerEvent : []StateEvents
-	linearizedStateDAG := []*EventNode{}               // []StateEvents
+	mostRecentPowerEvent := map[EventID][]*EventNode{} // PowerEvent : []Event
+	linearizedDAG := []*EventNode{}
 	for _, event := range d.eventsByID {
-		if event.isNewStateEvent() {
+		if event.isTimelineOrStateEvent() {
 			nextAuthEvents := []EventIDNode{}
 			for parentID, parentEvent := range event.authChainParents {
 				nextAuthEvents = append(nextAuthEvents, EventIDNode{parentID, parentEvent})
@@ -434,12 +428,19 @@ func (d *RoomDAG) linearizeStateDAG() []*EventNode {
 				mostRecentPowerEvent[latestPowerEvent.ID] = []*EventNode{}
 			}
 			mostRecentPowerEvent[latestPowerEvent.ID] = append(mostRecentPowerEvent[latestPowerEvent.ID], event)
+			event.experimentalEvent.AuthEvents = []string{latestPowerEvent.ID}
 		}
 	}
 
-	// TODO: Sort linearized state sublists from mostRecentPowerEvent
+	// TODO: Set the prev_events for non-power nodes
 
-	return linearizedStateDAG
+	for _, powerEvent := range d.linearizedPowerDAG {
+		if _, ok := mostRecentPowerEvent[powerEvent.event.EventID]; ok {
+			// TODO: Sort event sublist & append to linearizedDAG
+		}
+	}
+
+	return linearizedDAG
 }
 
 type EventIDNode struct {

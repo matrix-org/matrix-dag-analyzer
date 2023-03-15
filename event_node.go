@@ -85,3 +85,11 @@ func (e *EventNode) isPowerEvent() bool {
 func (e *EventNode) isNewStateEvent() bool {
 	return e.isStateEvent() && !e.isPowerEvent()
 }
+
+func (e *EventNode) isTimelineEvent() bool {
+	return !e.isPowerEvent() && !e.isStateEvent()
+}
+
+func (e *EventNode) isTimelineOrStateEvent() bool {
+	return !e.isPowerEvent()
+}
