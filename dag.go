@@ -170,8 +170,17 @@ func ParseDAGFromFile(filename string, outputFilename string) (*RoomDAG, error) 
 	newStateDAG := dag.linearizeStateDAG()
 	log.Info().Msg(fmt.Sprintf("Size of Linear State DAG: %v", len(newStateDAG)))
 
+	err = dag.generatePowerDAGJSON(outputFilename)
+	if err != nil {
+		return nil, err
+	}
+
+	return &dag, nil
+}
+
+func (d *RoomDAG) generatePowerDAGJSON(outputFilename string) error {
 	// NOTE: Generate power DAG parent events
-	for eventID, event := range dag.eventsByID {
+	for eventID, event := range d.eventsByID {
 		if !event.isPowerEvent() {
 			continue
 		}
@@ -183,9 +192,9 @@ func ParseDAGFromFile(filename string, outputFilename string) (*RoomDAG, error) 
 	// NOTE: Generate new experimental events for each event
 	newEventsFile, err := os.Create(outputFilename)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	for _, event := range dag.eventsByID {
+	for _, event := range d.eventsByID {
 		if event.event != nil {
 			oldEvent := event.event
 			prevEvents := []string{}
@@ -196,7 +205,7 @@ func ParseDAGFromFile(filename string, outputFilename string) (*RoomDAG, error) 
 			event.experimentalEvent = &ExperimentalEvent{
 				EventID:     oldEvent.EventID,
 				RoomVersion: oldEvent.RoomVersion,
-				AuthEvents:  []string{},
+				AuthEvents:  []string{}, // TODO: move the power parents here? or in powerEvents
 				Content:     oldEvent.Content,
 				Depth:       oldEvent.Depth, // TODO: what should this be now?
 				Hashes:      oldEvent.Hashes,
@@ -215,20 +224,35 @@ func ParseDAGFromFile(filename string, outputFilename string) (*RoomDAG, error) 
 				experimentalEventJSON, err := json.Marshal(event.experimentalEvent)
 				if err != nil {
 					log.Err(err).Msg("Failed marshalling experimental event")
-					return nil, err
+					return err
 				}
 				experimentalEventJSON = append(experimentalEventJSON, '\n')
 				_, err = newEventsFile.Write(experimentalEventJSON)
 				if err != nil {
-					return nil, err
+					return err
 				}
 			}
 		}
 	}
 
 	// TODO: Stretch - add state & timeline events off the power DAG
+	// Make a combined state & timeline DAG (excluding power DAG events)
+	// How do I hang them off the power DAG?
+	// How do I pick which power Event to reference?
+	// Also, if we are syncing full power DAGs between servers, what if we don't
+	// have the same power DAG as some other server?
+	// We still need to get events from them. This should be minimized though since power DAGs
+	// don't change that much or that fast.
+	// Also, in the event of relaying, you can just send the full power DAG along with relay events.
+	// This should always result in the events being able to be authed.
 
-	return &dag, nil
+	// TODO:
+	// The problem might arise where you can't auth previously unseen power DAG events against your current view of the room state.
+	// In which case they may be discarded.
+	// But unless the new events are relying on those to auth with, there should be no issue.
+	// But what if they are?
+
+	return nil
 }
 
 const DefaultPowerLevel = 0
