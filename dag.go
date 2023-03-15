@@ -129,6 +129,13 @@ func ParseDAGFromFile(filename string, outputFilename string) (*RoomDAG, error) 
 				signedJoins++
 			}
 			event.MembershipContent = &content
+		case EVENT_TYPE_POWER_LEVELS:
+			var content PowerLevelsEventContent
+			err = json.Unmarshal(event.Content, &content)
+			if err != nil {
+				return nil, fmt.Errorf("Line %d: %w", lineNumber, err)
+			}
+			event.PowerLevelsContent = &content
 		}
 
 		err = dag.addEvent(event)
@@ -333,21 +340,14 @@ func (d *RoomDAG) linearizePowerDAG() []*EventNode {
 	// "If the room contains no `m.room.power_levels` event, the room's creator has a power level of
 	// 100, and all other users have a power level of 0."
 
-	// TODO: Sort sublists
-	//creator := UserID(d.createEvent.event.CreateContent.Creator)
-	//currentPowerLevels := map[UserID]PowerLevel{creator: 100}
-
+	currentPowerLevels := PowerLevels{Default: 0, Users: map[UserID]PowerLevel{}}
 	for i, events := range tempEventLine {
-		if len(events) == 1 {
-			linearPowerDAG = append(linearPowerDAG, events[0])
+		sortedEvents := d.sortPowerline(events, currentPowerLevels)
+		for _, event := range sortedEvents {
+			currentPowerLevels = d.calculateNewPowerLevels(event, currentPowerLevels)
+			linearPowerDAG = append(linearPowerDAG, event)
 			linearIndex := i
-			events[0].linearPowerIndex = &linearIndex
-		} else {
-			// TODO: Remove this after sorting sublists
-			for _, event := range events {
-				log.Info().Str("sender", event.event.Sender).Msg("Unsorted event")
-			}
-			log.Error().Msg(fmt.Sprintf("Unsorted power events not being added to linear power DAG! Count: %d", len(events)))
+			event.linearPowerIndex = &linearIndex
 		}
 	}
 
@@ -361,24 +361,23 @@ func (d *RoomDAG) linearizePowerDAG() []*EventNode {
 type UserID string
 type PowerLevel int
 
-func (d *RoomDAG) sortPowerline(events []EventID, powerLevels map[UserID]PowerLevel) []EventID {
+func (d *RoomDAG) sortPowerline(events []*EventNode, powerLevels PowerLevels) []*EventNode {
 	if len(events) <= 1 {
 		// Nothing to sort
 		return events
 	}
 
 	orderedEvents := events
-
 	sort.Slice(orderedEvents, func(i, j int) bool {
-		eventI := d.eventsByID[orderedEvents[i]]
-		eventJ := d.eventsByID[orderedEvents[j]]
+		eventI := orderedEvents[i]
+		eventJ := orderedEvents[j]
 
-		powerLevelI := PowerLevel(0)
-		powerLevelJ := PowerLevel(0)
-		if level, ok := powerLevels[UserID(eventI.event.EventID)]; ok {
+		powerLevelI := PowerLevel(powerLevels.Default)
+		powerLevelJ := PowerLevel(powerLevels.Default)
+		if level, ok := powerLevels.Users[UserID(eventI.event.EventID)]; ok {
 			powerLevelI = level
 		}
-		if level, ok := powerLevels[UserID(eventJ.event.EventID)]; ok {
+		if level, ok := powerLevels.Users[UserID(eventJ.event.EventID)]; ok {
 			powerLevelJ = level
 		}
 
@@ -404,13 +403,29 @@ func (d *RoomDAG) sortPowerline(events []EventID, powerLevels map[UserID]PowerLe
 	return orderedEvents
 }
 
-func (d *RoomDAG) calculateNewPowerLevels(events []EventID, powerLevels map[UserID]PowerLevel) map[UserID]PowerLevel {
+type PowerLevels struct {
+	Default PowerLevel
+	Users   map[UserID]PowerLevel
+}
+
+func (d *RoomDAG) calculateNewPowerLevels(event *EventNode, powerLevels PowerLevels) PowerLevels {
 	newPowerLevels := powerLevels
 
-	// TODO: this
-	//for _, eventID := range events {
-
-	//}
+	switch event.event.Type {
+	case EVENT_TYPE_CREATE:
+		newPowerLevels.Default = 0
+		newPowerLevels.Users = map[UserID]PowerLevel{}
+		newPowerLevels.Users[UserID(event.event.CreateContent.Creator)] = 100
+	case EVENT_TYPE_POWER_LEVELS:
+		// Upon receiving one of these events, room creator no longer has PL = 100 unless specified by this event
+		newPowerLevels.Default = PowerLevel(event.event.PowerLevelsContent.UsersDefault)
+		newPowerLevels.Users = map[UserID]PowerLevel{}
+		for user, powerLevel := range event.event.PowerLevelsContent.Users {
+			newPowerLevels.Users[UserID(user)] = PowerLevel(powerLevel)
+		}
+	default:
+		// TODO: can anything else change power levels?
+	}
 
 	return newPowerLevels
 }

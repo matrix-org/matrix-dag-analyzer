@@ -63,23 +63,24 @@ type EventID = string
 type EventType = string
 
 type Event struct {
-	EventID           string   `json:"_event_id"`
-	RoomVersion       string   `json:"_room_version"`
-	AuthEvents        []string `json:"auth_events"`
-	Content           RawJSON  `json:"content"`
-	Depth             int64    `json:"depth"`
-	Hashes            RawJSON  `json:"hashes"`
-	OriginTS          int64    `json:"origin_server_ts"`
-	PrevEvents        []string `json:"prev_events"`
-	Redacts           *string  `json:"redacts,omitempty"`
-	RoomID            string   `json:"room_id"`
-	Sender            string   `json:"sender"`
-	Signatures        RawJSON  `json:"signatures,omitempty"`
-	StateKey          *string  `json:"state_key,omitempty"`
-	Type              string   `json:"type"`
-	Unsigned          RawJSON  `json:"unsigned,omitempty"`
-	MembershipContent *MemberEventContent
-	CreateContent     *CreateEventContent
+	EventID            string   `json:"_event_id"`
+	RoomVersion        string   `json:"_room_version"`
+	AuthEvents         []string `json:"auth_events"`
+	Content            RawJSON  `json:"content"`
+	Depth              int64    `json:"depth"`
+	Hashes             RawJSON  `json:"hashes"`
+	OriginTS           int64    `json:"origin_server_ts"`
+	PrevEvents         []string `json:"prev_events"`
+	Redacts            *string  `json:"redacts,omitempty"`
+	RoomID             string   `json:"room_id"`
+	Sender             string   `json:"sender"`
+	Signatures         RawJSON  `json:"signatures,omitempty"`
+	StateKey           *string  `json:"state_key,omitempty"`
+	Type               string   `json:"type"`
+	Unsigned           RawJSON  `json:"unsigned,omitempty"`
+	MembershipContent  *MemberEventContent
+	CreateContent      *CreateEventContent
+	PowerLevelsContent *PowerLevelsEventContent
 }
 
 type ExperimentalEvent struct {
@@ -121,6 +122,11 @@ type CreateEventContent struct {
 	Predecessor PreviousRoom `json:"predecessor,omitempty"`
 	RoomVersion string       `json:"room_version,omitempty"`
 	Type        string       `json:"type,omitempty"`
+}
+
+type PowerLevelsEventContent struct {
+	Users        map[string]int `json:"users"`
+	UsersDefault int            `json:"users_default"`
 }
 
 type RawJSON []byte
