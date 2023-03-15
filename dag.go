@@ -79,6 +79,8 @@ type RoomDAG struct {
 	authMetrics      GraphMetrics
 
 	powerMetrics GraphMetrics
+
+	linearizedPowerDAG []*EventNode
 }
 
 func NewRoomDAG() RoomDAG {
@@ -154,27 +156,14 @@ func ParseDAGFromFile(filename string, outputFilename string) (*RoomDAG, error) 
 	dag.stateMetrics = dag.generateDAGMetrics(StateDAGType)
 	dag.generateDAG(PowerDAGType)
 	dag.powerMetrics = dag.generateDAGMetrics(PowerDAGType)
-
-	// NOTE: To generate New State DAG
-	// Traverse State DAG
-	// Create New State DAG using isNewStateEvent()
-	// Use that info to obtain the prev_state_events for each new state event
-	// The prev_power_event for each new state event is obtained from the power event mainline
-	// Use the same technique to generate prev_timeline_events & prev_power_event for each timeline event
-
-	linearPowerDAG := dag.linearizePowerDAG()
-	eventLine := []EventID{}
-	for _, event := range linearPowerDAG {
-		eventLine = append(eventLine, event.event.EventID)
-	}
-	log.Info().Msg(fmt.Sprintf("Linear Power DAG: %v", eventLine))
-	newStateDAG := dag.linearizeStateDAG()
-	log.Info().Msg(fmt.Sprintf("Size of Linear State DAG: %v", len(newStateDAG)))
-
 	err = dag.generatePowerDAGJSON()
 	if err != nil {
 		return nil, err
 	}
+
+	dag.createLinearizedPowerDAG()
+	// TODO: Generate new state DAG off power DAG
+	//newStateDAG := dag.linearizeStateDAG()
 
 	return &dag, nil
 }
@@ -272,7 +261,7 @@ const DefaultPowerLevel = 0
 // 2. For each non-power event, find the most recent power event by recursing up it's auth chain nodes
 // 3. Add that event as the non-power event's power event reference
 
-func (d *RoomDAG) linearizePowerDAG() []*EventNode {
+func (d *RoomDAG) createLinearizedPowerDAG() {
 	// NOTE: The create event should always be first
 	linearPowerDAG := []*EventNode{}
 	incomingEdgeCounts := map[*EventNode]int{}
@@ -355,7 +344,7 @@ func (d *RoomDAG) linearizePowerDAG() []*EventNode {
 		log.Panic().Msg(fmt.Sprintf("First event in linear power DAG (%s) is not create event (%s)", linearPowerDAG[0].event.EventID, d.createEvent.event.EventID))
 	}
 
-	return linearPowerDAG
+	d.linearizedPowerDAG = linearPowerDAG
 }
 
 type UserID string
