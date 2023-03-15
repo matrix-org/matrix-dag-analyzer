@@ -36,31 +36,25 @@ type GraphMetrics struct {
 	graph      *graph.Mutable
 }
 
-// TODO: Create State DAG off Power DAG
-// Will need to create a Power DAG mainline and link State events off it
-// Find the latest power event in the each state event's auth chain
-// Then create lists of State events per power event.
-// Then can linearize state events off of that
+// TODO: Create combined State & Timeline DAG off Power DAG
+// Will need to create a Power DAG mainline and link State/Timeline events off it
+// Find the latest power event in the each state/timeline event's auth chain
+// Then create lists of State/timeline events per power event.
+// Then can linearize state/timeline events off of that
 
-// TODO: Create Timeline DAG off Power DAG
-// Use the Power DAG mainline to link Timeline events off
-// Find the latest power event in the each timeline event's auth chain
-// Then create lists of timeline events per power event.
-// Then can linearize timeline events off of that
-
-// TODO: Create Timeline DAG off State DAG?
-// Use the Power/State DAG mainline/s? to link Timeline events off
-
-// TODO: Create function to linearize Timeline DAG
+// TODO: Create function to linearize State/Timeline DAG
 
 // TODO: Create AddEvent function which adds either a power/state/timeline event to the DAG
 
-// TODO: Create an AuthEvent function which checks a power/state/timeline event if it's allowed?
+// TODO: Create an AuthEvent function which checks whether a power/state/timeline event is allowed
+
+// TODO: Are power events still part of the total set of state events? I don't think there is reason
+// to overlap them anymore.
 
 // NOTE: All new events have a prev_power_event
 // NOTE: New Power events only have a prev_power_event
-// NOTE: New State events have a prev_state_event
-// NOTE: New Timeline events have a prev_timeline_event
+// NOTE: New State events have a prev_event
+// NOTE: New Timeline events have a prev_event
 
 // NOTE: Can convert historical Room DAGs into new Power Event DAGs + State/Timeline DAGs
 // NOTE: Should be backwards compatible, ie. servers not doing the new DAG stuff can still
@@ -178,7 +172,7 @@ func ParseDAGFromFile(filename string, outputFilename string) (*RoomDAG, error) 
 	return &dag, nil
 }
 
-func (d *RoomDAG) PrintPowerDAGJSON(outputFilename string) error {
+func (d *RoomDAG) CreatePowerDAGJSON(outputFilename string) error {
 	newEventsFile, err := os.Create(outputFilename)
 	if err != nil {
 		return err
@@ -266,16 +260,23 @@ func (d *RoomDAG) generatePowerDAGJSON() error {
 
 const DefaultPowerLevel = 0
 
+// TODO: Connect state/timeline events to branches off the power DAG
+// 1. linearizePowerDAG
+// 2. For each non-power event, find the most recent power event by recursing up it's auth chain nodes
+// 3. Add that event as the non-power event's power event reference
+
 func (d *RoomDAG) linearizePowerDAG() []*EventNode {
 	// NOTE: The create event should always be first
 	linearPowerDAG := []*EventNode{}
-	incomingEdges := map[EventID]int{}
-	outgoingEdges := map[EventID][]EventID{}
-	for eventID, event := range d.eventsByID {
+	incomingEdgeCounts := map[*EventNode]int{}
+	for _, event := range d.eventsByID {
 		if event.isPowerEvent() {
+			// NOTE: TLDR: Sorting power events top->bottom seems like the way to go
+
 			// TODO: What is the difference in linearizing from top->bottom vs. bottom->top?
 			// For one, any dangling backward extremities will be sorted differently
 			// Also forward extremities are sorted differently
+			// Dangling backward extremities seem like they shouldn't be valid anyway. Where do they even come from?
 
 			// TODO: How do you obtain the current power level for a sender?
 			// You would need to keep track of it changing over time for proper sorting.
@@ -286,34 +287,25 @@ func (d *RoomDAG) linearizePowerDAG() []*EventNode {
 			// level being different depending on the sorting algorithm...
 			// Does this problem still in today's State DAG? All the extra state does is probably
 			// make it less likely?
+			// This seems very similar to State Resets in state res v2: https://github.com/matrix-org/internal-config/issues/844
 
-			incomingEdges[eventID] = len(event.powerChildren)
-			for childID := range event.powerChildren {
-				if _, ok := outgoingEdges[childID]; !ok {
-					outgoingEdges[childID] = []EventID{}
+			for _, child := range event.powerChildren {
+				if _, ok := incomingEdgeCounts[child]; !ok {
+					incomingEdgeCounts[child] = 0
 				}
-				outgoingEdges[childID] = append(outgoingEdges[childID], eventID)
+				incomingEdgeCounts[child]++
 			}
 		}
 	}
 
-	// TODO: What I should actually do to maintain consistency:
-	// Do kahn's algoritm backward as described (bottom->top)
+	// NOTE: Linearization algorithm used:
+	// Sort using kahn's algorithm from top->bottom (create->extremities)
 	// At each step, if more than 1 event, postpone sorting until later
 	// After I have a "sorted" list of lists, then go through from the start, applying
 	// power levels as I go, and sort the remainder of the list
-	// This keeps the semantics the same as they are now (maybe?) where we keep the forward extremities
-	// at the end of the linearized DAG
 
-	tempEventLine := [][]EventID{}
-
-	nextEvents := []EventID{}
-	for eventID, edgeCount := range incomingEdges {
-		if edgeCount == 0 {
-			nextEvents = append(nextEvents, eventID)
-		}
-	}
-
+	tempEventLine := [][]*EventNode{}
+	nextEvents := []*EventNode{d.createEvent}
 	for {
 		if len(nextEvents) == 0 {
 			break
@@ -321,43 +313,40 @@ func (d *RoomDAG) linearizePowerDAG() []*EventNode {
 
 		tempEventLine = append(tempEventLine, nextEvents)
 
-		for _, nextID := range nextEvents {
-			for _, eventID := range outgoingEdges[nextID] {
-				incomingEdges[eventID] -= 1
+		for _, next := range nextEvents {
+			for _, powerChild := range next.powerChildren {
+				incomingEdgeCounts[powerChild]--
 			}
-			delete(incomingEdges, nextID)
+			delete(incomingEdgeCounts, next)
 		}
 
-		nextEvents = []EventID{}
-		for eventID, edgeCount := range incomingEdges {
+		nextEvents = []*EventNode{}
+		for eventID, edgeCount := range incomingEdgeCounts {
 			if edgeCount == 0 {
 				nextEvents = append(nextEvents, eventID)
 			}
 		}
 	}
 
-	// NOTE: Reverse list so create event is first
-	for i, j := 0, len(tempEventLine)-1; i < j; i, j = i+1, j-1 {
-		tempEventLine[i], tempEventLine[j] = tempEventLine[j], tempEventLine[i]
-	}
-
-	// TODO: Sort sublists
 	// TODO: How do we handle power levels if the create event refers to an older version of the room?
-
 	// NOTE: From the create event until power levels are changed, the following rule applies:
 	// "If the room contains no `m.room.power_levels` event, the room's creator has a power level of
 	// 100, and all other users have a power level of 0."
 
+	// TODO: Sort sublists
 	//creator := UserID(d.createEvent.event.CreateContent.Creator)
 	//currentPowerLevels := map[UserID]PowerLevel{creator: 100}
 
 	for i, events := range tempEventLine {
 		if len(events) == 1 {
-			linearPowerDAG = append(linearPowerDAG, d.eventsByID[events[0]])
+			linearPowerDAG = append(linearPowerDAG, events[0])
 			linearIndex := i
-			d.eventsByID[events[0]].linearPowerIndex = &linearIndex
+			events[0].linearPowerIndex = &linearIndex
 		} else {
 			// TODO: Remove this after sorting sublists
+			for _, event := range events {
+				log.Info().Str("sender", event.event.Sender).Msg("Unsorted event")
+			}
 			log.Error().Msg(fmt.Sprintf("Unsorted power events not being added to linear power DAG! Count: %d", len(events)))
 		}
 	}

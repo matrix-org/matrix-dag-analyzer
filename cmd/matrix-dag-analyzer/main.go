@@ -72,7 +72,7 @@ func main() {
 			Msg("The number of events in the file does not match the number of events referenced in the file")
 	}
 	dag.PrintMetrics()
-	dag.PrintPowerDAGJSON(outputFilePath)
+	dag.CreatePowerDAGJSON(outputFilePath)
 
 	// TODO: Create new `Power Events` & write to json file
 }
