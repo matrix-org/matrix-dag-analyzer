@@ -170,7 +170,7 @@ func ParseDAGFromFile(filename string, outputFilename string) (*RoomDAG, error) 
 	newStateDAG := dag.linearizeStateDAG()
 	log.Info().Msg(fmt.Sprintf("Size of Linear State DAG: %v", len(newStateDAG)))
 
-	err = dag.generatePowerDAGJSON(outputFilename)
+	err = dag.generatePowerDAGJSON()
 	if err != nil {
 		return nil, err
 	}
@@ -178,7 +178,33 @@ func ParseDAGFromFile(filename string, outputFilename string) (*RoomDAG, error) 
 	return &dag, nil
 }
 
-func (d *RoomDAG) generatePowerDAGJSON(outputFilename string) error {
+func (d *RoomDAG) PrintPowerDAGJSON(outputFilename string) error {
+	newEventsFile, err := os.Create(outputFilename)
+	if err != nil {
+		return err
+	}
+
+	for _, event := range d.eventsByID {
+		if event.event != nil {
+			if event.isPowerEvent() {
+				experimentalEventJSON, err := json.Marshal(event.experimentalEvent)
+				if err != nil {
+					log.Err(err).Msg("Failed marshalling experimental event")
+					return err
+				}
+				experimentalEventJSON = append(experimentalEventJSON, '\n')
+				_, err = newEventsFile.Write(experimentalEventJSON)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func (d *RoomDAG) generatePowerDAGJSON() error {
 	// NOTE: Generate power DAG parent events
 	for eventID, event := range d.eventsByID {
 		if !event.isPowerEvent() {
@@ -190,10 +216,6 @@ func (d *RoomDAG) generatePowerDAGJSON(outputFilename string) error {
 	}
 
 	// NOTE: Generate new experimental events for each event
-	newEventsFile, err := os.Create(outputFilename)
-	if err != nil {
-		return err
-	}
 	for _, event := range d.eventsByID {
 		if event.event != nil {
 			oldEvent := event.event
@@ -218,19 +240,6 @@ func (d *RoomDAG) generatePowerDAGJSON(outputFilename string) error {
 				StateKey:    oldEvent.StateKey,
 				Type:        oldEvent.Type,
 				Unsigned:    oldEvent.Unsigned,
-			}
-
-			if event.isPowerEvent() {
-				experimentalEventJSON, err := json.Marshal(event.experimentalEvent)
-				if err != nil {
-					log.Err(err).Msg("Failed marshalling experimental event")
-					return err
-				}
-				experimentalEventJSON = append(experimentalEventJSON, '\n')
-				_, err = newEventsFile.Write(experimentalEventJSON)
-				if err != nil {
-					return err
-				}
 			}
 		}
 	}
