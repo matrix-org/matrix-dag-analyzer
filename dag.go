@@ -419,16 +419,18 @@ func (d *RoomDAG) linearizeStateAndTimelineDAG() []*EventNode {
 	linearizedDAG := []*EventNode{}
 	for _, event := range d.eventsByID {
 		if event.isTimelineOrStateEvent() {
-			nextAuthEvents := []EventIDNode{}
+			nextAuthEvents := []*EventIDNode{}
 			for parentID, parentEvent := range event.authChainParents {
-				nextAuthEvents = append(nextAuthEvents, EventIDNode{parentID, parentEvent})
+				nextAuthEvents = append(nextAuthEvents, &EventIDNode{parentID, parentEvent})
 			}
 			latestPowerEvent := d.findLatestPowerEvent(nextAuthEvents)
-			if _, ok := mostRecentPowerEvent[latestPowerEvent.ID]; !ok {
-				mostRecentPowerEvent[latestPowerEvent.ID] = []*EventNode{}
+			if latestPowerEvent != nil {
+				if _, ok := mostRecentPowerEvent[latestPowerEvent.ID]; !ok {
+					mostRecentPowerEvent[latestPowerEvent.ID] = []*EventNode{}
+				}
+				mostRecentPowerEvent[latestPowerEvent.ID] = append(mostRecentPowerEvent[latestPowerEvent.ID], event)
+				event.experimentalEvent.AuthEvents = []string{latestPowerEvent.ID}
 			}
-			mostRecentPowerEvent[latestPowerEvent.ID] = append(mostRecentPowerEvent[latestPowerEvent.ID], event)
-			event.experimentalEvent.AuthEvents = []string{latestPowerEvent.ID}
 		}
 	}
 
@@ -448,8 +450,12 @@ type EventIDNode struct {
 	Node *EventNode
 }
 
-func (d *RoomDAG) findLatestPowerEvent(authEvents []EventIDNode) EventIDNode {
-	var latestPowerEvent EventIDNode
+func (d *RoomDAG) findLatestPowerEvent(authEvents []*EventIDNode) *EventIDNode {
+	if len(authEvents) == 0 {
+		return nil
+	}
+
+	var latestPowerEvent *EventIDNode
 	latestIndex := 0
 	found := false
 	for _, authEvent := range authEvents {
@@ -462,14 +468,14 @@ func (d *RoomDAG) findLatestPowerEvent(authEvents []EventIDNode) EventIDNode {
 		}
 	}
 	if !found {
-		nextAuthEvents := []EventIDNode{}
+		nextAuthEvents := []*EventIDNode{}
 		for _, authEvent := range authEvents {
 			if authEvent.Node == nil {
 				continue
 			}
 
 			for parentID, parentEvent := range authEvent.Node.authChainParents {
-				nextAuthEvents = append(nextAuthEvents, EventIDNode{parentID, parentEvent})
+				nextAuthEvents = append(nextAuthEvents, &EventIDNode{parentID, parentEvent})
 			}
 		}
 		latestPowerEvent = d.findLatestPowerEvent(nextAuthEvents)
