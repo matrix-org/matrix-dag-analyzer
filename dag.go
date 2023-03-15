@@ -156,7 +156,7 @@ func ParseDAGFromFile(filename string, outputFilename string) (*RoomDAG, error) 
 	dag.stateMetrics = dag.generateDAGMetrics(StateDAGType)
 	dag.generateDAG(PowerDAGType)
 	dag.powerMetrics = dag.generateDAGMetrics(PowerDAGType)
-	err = dag.generatePowerDAGJSON()
+	err = dag.generateExperimentalEvents()
 	if err != nil {
 		return nil, err
 	}
@@ -193,7 +193,7 @@ func (d *RoomDAG) CreatePowerDAGJSON(outputFilename string) error {
 	return nil
 }
 
-func (d *RoomDAG) generatePowerDAGJSON() error {
+func (d *RoomDAG) generateExperimentalEvents() error {
 	// NOTE: Generate power DAG parent events
 	for eventID, event := range d.eventsByID {
 		if !event.isPowerEvent() {
