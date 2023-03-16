@@ -21,6 +21,7 @@ import (
 	"math"
 	"os"
 	"sort"
+	"time"
 
 	"github.com/rs/zerolog/log"
 	"github.com/yourbasic/graph"
@@ -145,8 +146,8 @@ func ParseDAGFromFile(filename string, outputFilename string) (*RoomDAG, error) 
 			return nil, fmt.Errorf("Line %d: %w", lineNumber, err)
 		}
 	}
-	println("Joins: ", joins)
-	println("Signed Joins: ", signedJoins)
+	log.Info().Msg(fmt.Sprintf("Joins: %d", joins))
+	log.Info().Msg(fmt.Sprintf("Signed Joins: %d", signedJoins))
 
 	dag.roomMetrics = dag.generateDAGMetrics(RoomDAGType)
 	dag.authChainMetrics = dag.generateDAGMetrics(AuthChainType)
@@ -462,10 +463,7 @@ func (d *RoomDAG) linearizeStateAndTimelineDAG() []*EventNode {
 	// Something like... If all prev_events specify the same power_event as this event, then accept. Otherwise reject.
 	// What if you can't obtain one or more of the prev_events? Maybe accept it as long as all you can obtain are on the same power_event?
 
-	// Go through the list of linearized power events
-	// For each item, get the list of state/timeline nodes for it
-	// Make a DAG out of them...?
-	// Could use the main room DAG, and create sub-dags using the list of events maybe?
+	// TODO: What do we do with events that don't have any prev events that contain a matching power event?
 
 	for _, powerEvent := range d.linearizedPowerDAG {
 		if events, ok := mostRecentPowerEvent[powerEvent.event.EventID]; ok {
@@ -516,6 +514,7 @@ func (d *RoomDAG) linearizeStateAndTimelineDAG() []*EventNode {
 				eventCount++
 				if len(event.newPrevEvents) == 0 {
 					zeroCount++
+					log.Warn().Msg(fmt.Sprintf("No prev events with matching power event: ID: %s Timestamp: %v Sender: %s Type: %s", event.event.EventID, time.Unix(event.event.OriginTS/1000, 0), event.event.Sender, event.event.Type))
 				}
 				for _, prev := range event.newPrevEvents {
 					if prev.newPrevPowerEvent != powerEvent && prev != powerEvent {
@@ -525,7 +524,7 @@ func (d *RoomDAG) linearizeStateAndTimelineDAG() []*EventNode {
 			}
 		}
 	}
-	log.Info().Msg(fmt.Sprintf("eventCount: %d branchCount: %d zeroCount: %d", eventCount, branchCount, zeroCount))
+	log.Info().Msg(fmt.Sprintf("Tiered DAG: eventCount: %d branchCount: %d zeroCount: %d", eventCount, branchCount, zeroCount))
 
 	return linearizedDAG
 }
