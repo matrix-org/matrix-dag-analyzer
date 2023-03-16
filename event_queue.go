@@ -20,6 +20,7 @@ const (
 	AuthEvent EventEnumType = iota
 	StateEvent
 	PowerEvent
+	NewStateTimelineEvent
 )
 
 type EventQueue struct {
@@ -55,6 +56,10 @@ func (e *EventQueue) AddChild(eventID EventID, event *EventNode, eventType Event
 			if _, ok := queueEvent.powerChildren[eventID]; !ok {
 				queueEvent.powerChildren[eventID] = event
 			}
+		case NewStateTimelineEvent:
+			if _, ok := queueEvent.tempChildren[eventID]; !ok {
+				queueEvent.tempChildren[eventID] = event
+			}
 		}
 	}
 }
@@ -78,6 +83,12 @@ func (e *EventQueue) AddChildrenFromNode(event *EventNode, eventType EventEnumTy
 			for childID, child := range event.powerChildren {
 				if _, ok := queueEvent.powerChildren[childID]; !ok {
 					queueEvent.powerChildren[childID] = child
+				}
+			}
+		case NewStateTimelineEvent:
+			for childID, child := range event.tempChildren {
+				if _, ok := queueEvent.tempChildren[childID]; !ok {
+					queueEvent.tempChildren[childID] = child
 				}
 			}
 		}

@@ -216,7 +216,7 @@ func (d *RoomDAG) generateExperimentalEvents() error {
 			event.experimentalEvent = &ExperimentalEvent{
 				EventID:     oldEvent.EventID,
 				RoomVersion: oldEvent.RoomVersion,
-				AuthEvents:  []string{}, // TODO: move the power parents here? or in powerEvents
+				AuthEvents:  []string{}, // TODO: move the power parents here? or in PowerEvents
 				Content:     oldEvent.Content,
 				Depth:       oldEvent.Depth, // TODO: what should this be now?
 				Hashes:      oldEvent.Hashes,
@@ -236,7 +236,7 @@ func (d *RoomDAG) generateExperimentalEvents() error {
 	// TODO: Stretch - add state & timeline events off the power DAG
 	// Make a combined state & timeline DAG (excluding power DAG events)
 	// How do I hang them off the power DAG?
-	// How do I pick which power Event to reference?
+	// How do I pick which power Event to reference? Latest linearized power event from their auth chain.
 	// Also, if we are syncing full power DAGs between servers, what if we don't
 	// have the same power DAG as some other server?
 	// We still need to get events from them. This should be minimized though since power DAGs
@@ -278,7 +278,6 @@ func (d *RoomDAG) createLinearizedPowerDAG() {
 			// Does this problem still in today's State DAG? All the extra state does is probably
 			// make it less likely?
 			// This seems very similar to State Resets in state res v2: https://github.com/matrix-org/internal-config/issues/844
-
 			for _, child := range event.powerChildren {
 				if _, ok := incomingEdgeCounts[child]; !ok {
 					incomingEdgeCounts[child] = 0
@@ -415,7 +414,7 @@ func (d *RoomDAG) calculateNewPowerLevels(event *EventNode, powerLevels PowerLev
 
 func (d *RoomDAG) linearizeStateAndTimelineDAG() []*EventNode {
 	// NOTE: This map contains info for the new Auth Chains of State Events
-	mostRecentPowerEvent := map[EventID][]*EventNode{} // PowerEvent : []Event
+	mostRecentPowerEvent := map[EventID]map[*EventNode]struct{}{} // PowerEvent : []Event
 	linearizedDAG := []*EventNode{}
 	for _, event := range d.eventsByID {
 		if event.isTimelineOrStateEvent() {
@@ -424,25 +423,136 @@ func (d *RoomDAG) linearizeStateAndTimelineDAG() []*EventNode {
 				nextAuthEvents = append(nextAuthEvents, &EventIDNode{parentID, parentEvent})
 			}
 			latestPowerEvent := d.findLatestPowerEvent(nextAuthEvents)
+			if latestPowerEvent == nil {
+				log.Warn().
+					Str("ID", event.event.EventID).
+					Str("Type", event.event.Type).
+					Msg("This event's auth chain doesn't link up to a power event...")
+				for parentID := range event.authChainParents {
+					log.Warn().Msg(fmt.Sprintf("Parent: %s", parentID))
+					log.Warn().Msg(fmt.Sprintf("Create: %s", d.createEvent.event.EventID))
+				}
+			}
 			if latestPowerEvent != nil {
 				if _, ok := mostRecentPowerEvent[latestPowerEvent.ID]; !ok {
-					mostRecentPowerEvent[latestPowerEvent.ID] = []*EventNode{}
+					mostRecentPowerEvent[latestPowerEvent.ID] = map[*EventNode]struct{}{}
 				}
-				mostRecentPowerEvent[latestPowerEvent.ID] = append(mostRecentPowerEvent[latestPowerEvent.ID], event)
+				mostRecentPowerEvent[latestPowerEvent.ID][event] = struct{}{}
 				event.experimentalEvent.AuthEvents = []string{latestPowerEvent.ID}
 			}
 		}
 	}
 
 	// TODO: Set the prev_events for non-power nodes
+	// what are they?
+	// They would be the same prev_events as before possibly?
+	// The prev events need to have the same power event reference
+	// Should they refer to all forward extremity power events? not just the one latest in the linear timeline?
+	// Only new power events should consolidate power event extremities.
+	// State & timeline events should choose that power event that is the latest in the timeline base on
+	// linearization rules.
+	// Is this right and/or a good idea???
+	// So, ideally, all state/timeline events should have prev_events that are on the same branch (same power event), and
+	// the prev_events try to consolidate all forward extremities on that branch
+
+	// TODO: What if they choose prev_events that aren't on the same branch?
+	// This should only happen if the server sending that event isn't following the rules, which means it should be rejected.
+	// Do you auth against the prev_events for this case?
+	// This requires obtaining the prev_events if you don't have them already.
+	// Something like... If all prev_events specify the same power_event as this event, then accept. Otherwise reject.
+	// What if you can't obtain one or more of the prev_events? Maybe accept it as long as all you can obtain are on the same power_event?
+
+	// Go through the list of linearized power events
+	// For each item, get the list of state/timeline nodes for it
+	// Make a DAG out of them...?
+	// Could use the main room DAG, and create sub-dags using the list of events maybe?
 
 	for _, powerEvent := range d.linearizedPowerDAG {
-		if _, ok := mostRecentPowerEvent[powerEvent.event.EventID]; ok {
+		if events, ok := mostRecentPowerEvent[powerEvent.event.EventID]; ok {
+			for event := range events {
+				event.newPrevPowerEvent = powerEvent
+			}
 			// TODO: Sort event sublist & append to linearizedDAG
 		}
 	}
 
+	for _, powerEvent := range d.linearizedPowerDAG {
+		seenEvents := map[EventID]struct{}{}
+		queue := NewEventQueue()
+		d.findBranchChildren(powerEvent.event.EventID, powerEvent, powerEvent, powerEvent, &queue, seenEvents)
+		for childID, child := range powerEvent.tempChildren {
+			powerEvent.newRoomChildren[childID] = child
+		}
+
+		if events, ok := mostRecentPowerEvent[powerEvent.event.EventID]; ok {
+			for event := range events {
+				queue = NewEventQueue()
+				d.findBranchChildren(event.event.EventID, event, event, powerEvent, &queue, seenEvents)
+				for childID, child := range event.tempChildren {
+					event.newRoomChildren[childID] = child
+				}
+			}
+		}
+
+		// Clear the temp maps
+		for _, event := range d.eventsByID {
+			event.tempChildren = map[string]*EventNode{}
+		}
+	}
+
+	for eventID, event := range d.eventsByID {
+		for _, child := range event.newRoomChildren {
+			child.newPrevEvents[eventID] = event
+		}
+	}
+
+	zeroCount := 0
+	branchCount := 0
+	eventCount := 0
+	for _, powerEvent := range d.linearizedPowerDAG {
+		if events, ok := mostRecentPowerEvent[powerEvent.event.EventID]; ok {
+			branchCount++
+			for event := range events {
+				eventCount++
+				if len(event.newPrevEvents) == 0 {
+					zeroCount++
+				}
+				for _, prev := range event.newPrevEvents {
+					if prev.newPrevPowerEvent != powerEvent && prev != powerEvent {
+						log.Panic().Msg(fmt.Sprintf("Uh oh! Prev: %v, Power: %s", prev.newPrevPowerEvent.event.EventID, powerEvent.event.EventID))
+					}
+				}
+			}
+		}
+	}
+	log.Info().Msg(fmt.Sprintf("eventCount: %d branchCount: %d zeroCount: %d", eventCount, branchCount, zeroCount))
+
 	return linearizedDAG
+}
+
+func (d *RoomDAG) findBranchChildren(eventID EventID, event *EventNode, origin *EventNode, powerEvent *EventNode, queue *EventQueue, seenEvents map[EventID]struct{}) {
+	seenEvents[eventID] = struct{}{}
+
+	if event != origin && event.newPrevPowerEvent == powerEvent {
+		queue.AddChild(eventID, event, NewStateTimelineEvent)
+		return
+	}
+
+	queue.Push(event)
+	for childID, child := range event.roomChildren {
+		if _, ok := seenEvents[childID]; !ok {
+			d.findBranchChildren(childID, child, origin, powerEvent, queue, seenEvents)
+		} else {
+			if child.newPrevPowerEvent == powerEvent {
+				queue.AddChild(childID, child, NewStateTimelineEvent)
+			} else {
+				queue.AddChildrenFromNode(child, NewStateTimelineEvent)
+			}
+		}
+	}
+	queue.Pop()
+
+	return
 }
 
 type EventIDNode struct {
@@ -456,29 +566,34 @@ func (d *RoomDAG) findLatestPowerEvent(authEvents []*EventIDNode) *EventIDNode {
 	}
 
 	var latestPowerEvent *EventIDNode
-	latestIndex := 0
-	found := false
+	latestIndex := -1
 	for _, authEvent := range authEvents {
 		if index := d.eventsByID[authEvent.ID].linearPowerIndex; index != nil {
-			found = true
 			if *index > latestIndex {
 				latestIndex = *index
 				latestPowerEvent = authEvent
 			}
 		}
 	}
-	if !found {
-		nextAuthEvents := []*EventIDNode{}
-		for _, authEvent := range authEvents {
-			if authEvent.Node == nil {
-				continue
-			}
 
-			for parentID, parentEvent := range authEvent.Node.authChainParents {
-				nextAuthEvents = append(nextAuthEvents, &EventIDNode{parentID, parentEvent})
+	nextAuthEvents := []*EventIDNode{}
+	for _, authEvent := range authEvents {
+		if authEvent.Node == nil {
+			continue
+		}
+
+		for parentID, parentEvent := range authEvent.Node.authChainParents {
+			nextAuthEvents = append(nextAuthEvents, &EventIDNode{parentID, parentEvent})
+		}
+	}
+	if len(nextAuthEvents) > 0 {
+		newEvent := d.findLatestPowerEvent(nextAuthEvents)
+		if index := d.eventsByID[newEvent.ID].linearPowerIndex; index != nil {
+			if *index > latestIndex {
+				latestIndex = *index
+				latestPowerEvent = newEvent
 			}
 		}
-		latestPowerEvent = d.findLatestPowerEvent(nextAuthEvents)
 	}
 
 	return latestPowerEvent

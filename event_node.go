@@ -33,6 +33,11 @@ type EventNode struct {
 	powerChildren    map[EventID]*EventNode
 	powerParents     map[EventID]*EventNode
 	linearPowerIndex *int
+
+	newPrevPowerEvent *EventNode
+	newRoomChildren   map[EventID]*EventNode
+	tempChildren      map[EventID]*EventNode
+	newPrevEvents     map[EventID]*EventNode
 }
 
 type StateEventNode *EventNode
@@ -67,6 +72,9 @@ func newEventNode(event *Event, index int) EventNode {
 		authChainParents:  make(map[EventID]*EventNode),
 		powerChildren:     make(map[EventID]*EventNode),
 		powerParents:      make(map[EventID]*EventNode),
+		newRoomChildren:   make(map[EventID]*EventNode),
+		tempChildren:      make(map[EventID]*EventNode),
+		newPrevEvents:     make(map[EventID]*EventNode),
 	}
 }
 
@@ -91,5 +99,5 @@ func (e *EventNode) isTimelineEvent() bool {
 }
 
 func (e *EventNode) isTimelineOrStateEvent() bool {
-	return !e.isPowerEvent()
+	return e.event != nil && !IsPowerEvent(e.event)
 }
