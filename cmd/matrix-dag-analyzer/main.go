@@ -73,6 +73,4 @@ func main() {
 	}
 	dag.PrintMetrics()
 	dag.CreatePowerDAGJSON(outputFilePath)
-
-	// TODO: Create new `Power Events` & write to json file
 }

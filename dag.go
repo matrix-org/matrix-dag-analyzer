@@ -37,25 +37,16 @@ type GraphMetrics struct {
 	graph      *graph.Mutable
 }
 
-// TODO: Create combined State & Timeline DAG off Power DAG
-// Will need to create a Power DAG mainline and link State/Timeline events off it
-// Find the latest power event in the each state/timeline event's auth chain
-// Then create lists of State/timeline events per power event.
-// Then can linearize state/timeline events off of that
-
-// TODO: Create function to linearize State/Timeline DAG
-
-// TODO: Create AddEvent function which adds either a power/state/timeline event to the DAG
-
 // TODO: Create an AuthEvent function which checks whether a power/state/timeline event is allowed
-
+// TODO: Create function to linearize State/Timeline DAG
+// TODO: Create AddEvent function which adds either a power/state/timeline event to the DAG
 // TODO: Are power events still part of the total set of state events? I don't think there is reason
 // to overlap them anymore.
 
 // NOTE: All new events have a prev_power_event
 // NOTE: New Power events only have a prev_power_event
-// NOTE: New State events have a prev_event
-// NOTE: New Timeline events have a prev_event
+// NOTE: New State events also have a prev_event
+// NOTE: New Timeline events also have a prev_event
 
 // NOTE: Can convert historical Room DAGs into new Power Event DAGs + State/Timeline DAGs
 // NOTE: Should be backwards compatible, ie. servers not doing the new DAG stuff can still
