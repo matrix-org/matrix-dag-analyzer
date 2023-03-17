@@ -56,6 +56,67 @@ type GraphMetrics struct {
 // NOTE: Might want to modify the member events to extract power events into their own type to
 // make the logic & processing clearer & easier.
 
+type AuthResult int64
+
+const (
+	AuthReject AuthResult = iota
+	AuthAccept
+)
+
+type LinearPowerDAG []*EventNode
+
+// NOTE: The powerDAG input is the entirety of the linearized power DAG
+func EventAuthExperimental(event *EventNode, powerDAG LinearPowerDAG) AuthResult {
+	// TODO: This
+	// Check against the power event it points to
+	// Also check against the current state of the power DAG (ie. latest power state)
+
+	// NOTE: Comments with # specify the section of the spec's auth rules
+
+	switch event.event.Type {
+	case EVENT_TYPE_CREATE:
+		// 1.
+		if len(event.newPrevEvents) > 0 {
+			return AuthReject
+		}
+		// if room:domain != sender:domain { reject }
+		// if content.room_version is present & not recognised { reject }
+		// if content.creator isn't present { reject }
+		return AuthAccept
+	case EVENT_TYPE_MEMBER:
+		// 4.
+		// TODO: This
+	case EVENT_TYPE_THIRD_PARTY_INVITE:
+		// 6.
+		// if sender power level < invite { reject }
+	case EVENT_TYPE_POWER_LEVELS:
+		// 9.
+		// TODO: This
+	}
+
+	// 2.
+	// if prev_events.power_event != event.power_event { reject }
+	// if event.power_event is rejected { reject }
+	// if event.power_event isn't in power DAG { reject }
+
+	// 3.
+	// if m.room.create.content.federate == false && sender:domain != create.sender:domain { reject }
+
+	// 5.
+	// if sender membership state is not join { reject }
+	// TODO: instead of "is join / is not join" - check "is allowed / is not allowed"
+	// Define "is allowed / is not allowed"
+	// This is really the magic that makes auth different than current matrix
+
+	// 7.
+	// if type's power level > sender's power level { reject }
+
+	// 8.
+	// if event.state_key starts with "@" & != sender { reject }
+
+	return AuthAccept
+}
+
 type RoomDAG struct {
 	eventCount int
 
@@ -72,7 +133,7 @@ type RoomDAG struct {
 
 	powerMetrics GraphMetrics
 
-	linearizedPowerDAG []*EventNode
+	linearizedPowerDAG LinearPowerDAG
 }
 
 func NewRoomDAG() RoomDAG {
@@ -249,7 +310,7 @@ const DefaultPowerLevel = 0
 
 func (d *RoomDAG) createLinearizedPowerDAG() {
 	// NOTE: The create event should always be first
-	linearPowerDAG := []*EventNode{}
+	linearPowerDAG := LinearPowerDAG{}
 	incomingEdgeCounts := map[*EventNode]int{}
 	for _, event := range d.eventsByID {
 		if event.isPowerEvent() {
@@ -335,7 +396,7 @@ func (d *RoomDAG) createLinearizedPowerDAG() {
 type UserID string
 type PowerLevel int
 
-func (d *RoomDAG) sortPowerline(events []*EventNode, powerLevels PowerLevels) []*EventNode {
+func (d *RoomDAG) sortPowerline(events []*EventNode, powerLevels PowerLevels) LinearPowerDAG {
 	if len(events) <= 1 {
 		// Nothing to sort
 		return events
