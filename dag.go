@@ -107,6 +107,12 @@ func EventAuthExperimental(event *EventNode, powerDAG LinearPowerDAG) AuthResult
 	// TODO: instead of "is join / is not join" - check "is allowed / is not allowed"
 	// Define "is allowed / is not allowed"
 	// This is really the magic that makes auth different than current matrix
+	// Biggest problem is with the invite/leave sequencing on invite-only rooms.
+	// ie. is there an invite for this user, have they left since that invite, is there a new invite
+	// after the leave, what if there are multiple invites out before a leave (do they all cancel out), etc.
+	// Start by sorting out bans (What about kicks? are they any different than bans?)
+	// Then invite/leave chains
+	// Then look further into restricted rooms
 
 	// 7.
 	// if type's power level > sender's power level { reject }
@@ -466,16 +472,18 @@ func (d *RoomDAG) calculateNewPowerLevels(event *EventNode, powerLevels PowerLev
 }
 
 func (d *RoomDAG) linearizeStateAndTimelineDAG() []*EventNode {
+	log.Info().Msg("Calculating latest power event for each room event...")
 	// NOTE: This map contains info for the new Auth Chains of State Events
 	mostRecentPowerEvent := map[EventID]map[*EventNode]struct{}{} // PowerEvent : []Event
 	linearizedDAG := []*EventNode{}
 	for _, event := range d.eventsByID {
 		if event.isTimelineOrStateEvent() {
-			nextAuthEvents := []*EventIDNode{}
+			nextEvents := []*EventIDNode{}
+			//for parentID, parentEvent := range event.roomParents {
 			for parentID, parentEvent := range event.authChainParents {
-				nextAuthEvents = append(nextAuthEvents, &EventIDNode{parentID, parentEvent})
+				nextEvents = append(nextEvents, &EventIDNode{parentID, parentEvent})
 			}
-			latestPowerEvent := d.findLatestPowerEvent(nextAuthEvents)
+			latestPowerEvent := d.findLatestPowerEvent(nextEvents)
 			if latestPowerEvent == nil {
 				log.Warn().
 					Str("ID", event.event.EventID).
@@ -611,34 +619,36 @@ type EventIDNode struct {
 	Node *EventNode
 }
 
-func (d *RoomDAG) findLatestPowerEvent(authEvents []*EventIDNode) *EventIDNode {
-	if len(authEvents) == 0 {
+func (d *RoomDAG) findLatestPowerEvent(nextEvents []*EventIDNode) *EventIDNode {
+	if len(nextEvents) == 0 {
 		return nil
 	}
 
 	var latestPowerEvent *EventIDNode
 	latestIndex := -1
-	for _, authEvent := range authEvents {
-		if index := d.eventsByID[authEvent.ID].linearPowerIndex; index != nil {
+	for _, nextEvent := range nextEvents {
+		if index := d.eventsByID[nextEvent.ID].linearPowerIndex; index != nil {
 			if *index > latestIndex {
 				latestIndex = *index
-				latestPowerEvent = authEvent
+				latestPowerEvent = nextEvent
 			}
 		}
 	}
 
-	nextAuthEvents := []*EventIDNode{}
-	for _, authEvent := range authEvents {
-		if authEvent.Node == nil {
+	newNextEvents := []*EventIDNode{}
+	for _, nextEvent := range nextEvents {
+		if nextEvent.Node == nil {
 			continue
 		}
 
-		for parentID, parentEvent := range authEvent.Node.authChainParents {
-			nextAuthEvents = append(nextAuthEvents, &EventIDNode{parentID, parentEvent})
+		// NOTE : Unsure whether to use auth parents or room parents to select latest power event
+		//for parentID, parent := range nextEvent.Node.roomParents {
+		for parentID, parent := range nextEvent.Node.authChainParents {
+			newNextEvents = append(newNextEvents, &EventIDNode{parentID, parent})
 		}
 	}
-	if len(nextAuthEvents) > 0 {
-		newEvent := d.findLatestPowerEvent(nextAuthEvents)
+	if len(newNextEvents) > 0 {
+		newEvent := d.findLatestPowerEvent(newNextEvents)
 		if index := d.eventsByID[newEvent.ID].linearPowerIndex; index != nil {
 			if *index > latestIndex {
 				latestIndex = *index
