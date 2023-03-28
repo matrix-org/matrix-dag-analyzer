@@ -60,6 +60,7 @@ type AuthResult int64
 
 const (
 	AuthReject AuthResult = iota
+	AuthSoftFail
 	AuthAccept
 )
 
@@ -79,33 +80,35 @@ func EventAuthExperimental(event *EventNode, powerDAG LinearPowerDAG) AuthResult
 		if len(event.newPrevEvents) > 0 {
 			return AuthReject
 		}
+		// TODO: This: Same as current matrix rules
 		// if room:domain != sender:domain { reject }
 		// if content.room_version is present & not recognised { reject }
 		// if content.creator isn't present { reject }
 		return AuthAccept
 	case EVENT_TYPE_MEMBER:
 		// 4.
-		// TODO: This
+		// TODO: This: Same as current matrix rules
 	case EVENT_TYPE_THIRD_PARTY_INVITE:
 		// 6.
 		// if sender power level < invite { reject }
 	case EVENT_TYPE_POWER_LEVELS:
 		// 9.
-		// TODO: This
+		// TODO: This: Same as current matrix rules
 	}
 
 	// 2.
+	// TODO: This: Same as current matrix rules
 	// if prev_events.power_event != event.power_event { reject }
 	// if event.power_event is rejected { reject }
 	// if event.power_event isn't in power DAG { reject }
 
 	// 3.
+	// TODO: This: Same as current matrix rules
 	// if m.room.create.content.federate == false && sender:domain != create.sender:domain { reject }
 
 	// 5.
 	// if sender membership state is not join { reject }
-	// TODO: instead of "is join / is not join" - check "is allowed / is not allowed"
-	// Define "is allowed / is not allowed"
+	// NOTE: instead of "is join / is not join" - check "is allowed / is not allowed"
 	// This is really the magic that makes auth different than current matrix
 	// Biggest problem is with the invite/leave sequencing on invite-only rooms.
 	// ie. is there an invite for this user, have they left since that invite, is there a new invite
@@ -114,13 +117,89 @@ func EventAuthExperimental(event *EventNode, powerDAG LinearPowerDAG) AuthResult
 	// Then invite/leave chains
 	// Then look further into restricted rooms
 
+	// TODO: The following logic for both event power event & current room state
+	eventRoomState := roomStateAtEvent(event, powerDAG)
+	currentRoomState := roomStateAtEvent(powerDAG[len(powerDAG)-1], powerDAG)
+	isSenderAllowed := func(roomState RoomState, sender UserID) bool {
+		isAllowed := false
+		if roomState.isBannedUser(sender) {
+			return false
+		}
+
+		if roomState.isInviteOnlyRoom() {
+			isAllowed = roomState.hasOutstandingInvite(sender)
+		} else if roomState.isRestrictedRoom() {
+			isAllowed = roomState.hasOutstandingInvite(sender) || roomState.hasSignedJoin(sender)
+		} else {
+			isAllowed = true
+		}
+
+		return isAllowed
+	}
+	if !isSenderAllowed(eventRoomState, UserID(event.event.Sender)) {
+		return AuthReject
+	}
+	if !isSenderAllowed(currentRoomState, UserID(event.event.Sender)) {
+		return AuthSoftFail
+	}
+
 	// 7.
+	// TODO: This: Same as current matrix rules
 	// if type's power level > sender's power level { reject }
 
 	// 8.
+	// TODO: This: Same as current matrix rules
 	// if event.state_key starts with "@" & != sender { reject }
 
 	return AuthAccept
+}
+
+type RoomMode int64
+
+const (
+	RoomModePublic RoomMode = iota
+	RoomModeInvite
+	RoomModeRestricted
+)
+
+type RoomState struct {
+	Mode RoomMode
+}
+
+func roomStateAtEvent(event *EventNode, powerDAG LinearPowerDAG) RoomState {
+	// TODO: This
+	// Return linearized room state culmination from this event
+	return RoomState{}
+}
+
+func (r *RoomState) isInviteOnlyRoom() bool {
+	return r.Mode == RoomModeInvite
+}
+
+func (r *RoomState) isRestrictedRoom() bool {
+	return r.Mode == RoomModeRestricted
+}
+
+func (r *RoomState) isPublicRoom() bool {
+	return r.Mode == RoomModePublic
+}
+
+func (r *RoomState) isBannedUser(sender UserID) bool {
+	// TODO: This
+	// Look at bans & ACLs?
+	return true
+}
+
+func (r *RoomState) hasOutstandingInvite(sender UserID) bool {
+	// Look at invite map
+	// TODO: This
+	return false
+}
+
+func (r *RoomState) hasSignedJoin(sender UserID) bool {
+	// Look at signed joins map
+	// TODO: This
+	return false
 }
 
 type RoomDAG struct {
@@ -234,18 +313,18 @@ func (d *RoomDAG) CreatePowerDAGJSON(outputFilename string) error {
 
 	for _, event := range d.eventsByID {
 		if event.event != nil {
-			if event.isPowerEvent() {
-				experimentalEventJSON, err := json.Marshal(event.experimentalEvent)
-				if err != nil {
-					log.Err(err).Msg("Failed marshalling experimental event")
-					return err
-				}
-				experimentalEventJSON = append(experimentalEventJSON, '\n')
-				_, err = newEventsFile.Write(experimentalEventJSON)
-				if err != nil {
-					return err
-				}
+			//if event.isPowerEvent() {
+			experimentalEventJSON, err := json.Marshal(event.experimentalEvent)
+			if err != nil {
+				log.Err(err).Msg("Failed marshalling experimental event")
+				return err
 			}
+			experimentalEventJSON = append(experimentalEventJSON, '\n')
+			_, err = newEventsFile.Write(experimentalEventJSON)
+			if err != nil {
+				return err
+			}
+			//}
 		}
 	}
 
@@ -529,6 +608,18 @@ func (d *RoomDAG) linearizeStateAndTimelineDAG() []*EventNode {
 		if events, ok := mostRecentPowerEvent[powerEvent.event.EventID]; ok {
 			for event := range events {
 				event.newPrevPowerEvent = powerEvent
+
+				// TODO: Remove!!!
+				//exists := false
+				//for _, prevEvent := range event.experimentalEvent.PrevEvents {
+				//	if prevEvent == powerEvent.event.EventID {
+				//		exists = true
+				//		break
+				//	}
+				//}
+				//if !exists {
+				//	event.experimentalEvent.PrevEvents = append(event.experimentalEvent.PrevEvents, powerEvent.event.EventID)
+				//}
 			}
 			// TODO: Sort event sublist & append to linearizedDAG
 		}
@@ -561,6 +652,18 @@ func (d *RoomDAG) linearizeStateAndTimelineDAG() []*EventNode {
 	for eventID, event := range d.eventsByID {
 		for _, child := range event.newRoomChildren {
 			child.newPrevEvents[eventID] = event
+
+			// TODO: Remove!!!
+			exists := false
+			for _, prevEvent := range child.experimentalEvent.PrevEvents {
+				if prevEvent == eventID {
+					exists = true
+					break
+				}
+			}
+			if !exists {
+				child.experimentalEvent.PrevEvents = append(child.experimentalEvent.PrevEvents, eventID)
+			}
 		}
 	}
 
@@ -758,6 +861,7 @@ func (d *RoomDAG) PrintMetrics() {
 
 func (d *RoomDAG) addEvent(newEvent Event) error {
 	if foundEvent, ok := d.eventsByID[newEvent.EventID]; ok && foundEvent.event != nil {
+		log.Warn().Msg(fmt.Sprintf("Event: %v", newEvent))
 		return fmt.Errorf("Duplicate event ID detected in file: %s", newEvent.EventID)
 	}
 	if d.roomID != nil && *d.roomID != newEvent.RoomID {
