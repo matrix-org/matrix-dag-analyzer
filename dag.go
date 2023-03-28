@@ -242,6 +242,10 @@ func ParseDAGFromFile(filename string, outputFilename string) (*RoomDAG, error) 
 	lineNumber := 0
 	signedJoins := 0
 	joins := 0
+	leaves := 0
+	bans := 0
+	invites := 0
+	leavesByOtherMember := 0
 	for scanner.Scan() {
 		lineNumber = lineNumber + 1
 		var event Event
@@ -250,21 +254,38 @@ func ParseDAGFromFile(filename string, outputFilename string) (*RoomDAG, error) 
 			return nil, fmt.Errorf("Line %d: %w", lineNumber, err)
 		}
 
+		if dag.IsDuplicate(event) {
+			continue
+		}
+
 		switch event.Type {
 		case EVENT_TYPE_CREATE:
 			var content CreateEventContent
 			err = json.Unmarshal(event.Content, &content)
 			if err != nil {
-				return nil, fmt.Errorf("Line %d: %w", lineNumber, err)
+				log.Err(fmt.Errorf("Line %d: %w", lineNumber, err)).Msg("Skipping malformed event")
+				continue
 			}
 			event.CreateContent = &content
 		case EVENT_TYPE_MEMBER:
 			var content MemberEventContent
 			err = json.Unmarshal(event.Content, &content)
 			if err != nil {
-				return nil, fmt.Errorf("Line %d: %w", lineNumber, err)
+				log.Err(fmt.Errorf("Line %d: %w", lineNumber, err)).Msg("Skipping malformed event")
+				continue
 			}
-			joins++
+			if content.Membership == "join" {
+				joins++
+			} else if content.Membership == "leave" {
+				leaves++
+				if event.StateKey != nil && event.Sender != *event.StateKey {
+					leavesByOtherMember++
+				}
+			} else if content.Membership == "ban" {
+				bans++
+			} else if content.Membership == "invite" {
+				invites++
+			}
 			if content.JoinAuthorisedViaUsersServer != nil {
 				signedJoins++
 			}
@@ -273,7 +294,8 @@ func ParseDAGFromFile(filename string, outputFilename string) (*RoomDAG, error) 
 			var content PowerLevelsEventContent
 			err = json.Unmarshal(event.Content, &content)
 			if err != nil {
-				return nil, fmt.Errorf("Line %d: %w", lineNumber, err)
+				log.Err(fmt.Errorf("Line %d: %w", lineNumber, err)).Msg("Skipping malformed event")
+				continue
 			}
 			event.PowerLevelsContent = &content
 		}
@@ -283,15 +305,23 @@ func ParseDAGFromFile(filename string, outputFilename string) (*RoomDAG, error) 
 			return nil, fmt.Errorf("Line %d: %w", lineNumber, err)
 		}
 	}
-	log.Info().Msg(fmt.Sprintf("Joins: %d", joins))
-	log.Info().Msg(fmt.Sprintf("Signed Joins: %d", signedJoins))
+	log.Info().Msg(fmt.Sprintf("Member Leaves (total): %d", leaves))
+	log.Info().Msg(fmt.Sprintf("Member Leaves (by other member): %d", leavesByOtherMember))
+	log.Info().Msg(fmt.Sprintf("Member Bans: %d", bans))
+	log.Info().Msg(fmt.Sprintf("Member Invites: %d", invites))
+	log.Info().Msg(fmt.Sprintf("Member Joins: %d", joins))
+	log.Info().Msg(fmt.Sprintf("Member Signed Joins: %d", signedJoins))
 
+	log.Info().Msg("Generating Room DAG")
 	dag.roomMetrics = dag.generateDAGMetrics(RoomDAGType)
 	dag.authChainMetrics = dag.generateDAGMetrics(AuthChainType)
+	log.Info().Msg("Generating Auth DAG")
 	dag.generateDAG(AuthDAGType)
 	dag.authMetrics = dag.generateDAGMetrics(AuthDAGType)
+	log.Info().Msg("Generating State DAG")
 	dag.generateDAG(StateDAGType)
 	dag.stateMetrics = dag.generateDAGMetrics(StateDAGType)
+	log.Info().Msg("Generating Power DAG")
 	dag.generateDAG(PowerDAGType)
 	dag.powerMetrics = dag.generateDAGMetrics(PowerDAGType)
 	err = dag.generateExperimentalEvents()
@@ -299,6 +329,7 @@ func ParseDAGFromFile(filename string, outputFilename string) (*RoomDAG, error) 
 		return nil, err
 	}
 
+	log.Info().Msg("Linearizing Power DAG")
 	dag.createLinearizedPowerDAG()
 	dag.linearizeStateAndTimelineDAG()
 
@@ -848,7 +879,7 @@ func (d *RoomDAG) PrintMetrics() {
 
 	log.Info().Msg("***************************************************************")
 
-	log.Info().Msg(fmt.Sprintf("Power DAG: => m.room.{create, power_levels, join_rules, member.ban, member.leave}"))
+	log.Info().Msg(fmt.Sprintf("Power DAG: => m.room.{create, power_levels, join_rules, third_party_invite, server_acl, member.ban, member.invite, member.leave, member.restricted_join}"))
 	statsPower, statsPowerTranspose := getGraphStats(d.powerMetrics.graph, "Power")
 	log.Info().Msg(fmt.Sprintf("Power DAG Edges: %d", statsPower.Size))
 	log.Info().Msg(fmt.Sprintf("Backward Extremities (Power DAG): %d", statsPowerTranspose.Isolated))
@@ -859,10 +890,18 @@ func (d *RoomDAG) PrintMetrics() {
 	log.Info().Msg("***************************************************************")
 }
 
-func (d *RoomDAG) addEvent(newEvent Event) error {
+func (d *RoomDAG) IsDuplicate(newEvent Event) bool {
 	if foundEvent, ok := d.eventsByID[newEvent.EventID]; ok && foundEvent.event != nil {
-		log.Warn().Msg(fmt.Sprintf("Event: %v", newEvent))
-		return fmt.Errorf("Duplicate event ID detected in file: %s", newEvent.EventID)
+		return true
+	}
+	return false
+}
+
+func (d *RoomDAG) addEvent(newEvent Event) error {
+	if d.IsDuplicate(newEvent) {
+		//log.Warn().Msg(fmt.Sprintf("Duplicate EventID detected: %v", newEvent))
+		return nil
+		//return fmt.Errorf("Duplicate event ID detected in file: %s", newEvent.EventID)
 	}
 	if d.roomID != nil && *d.roomID != newEvent.RoomID {
 		return fmt.Errorf("Received event with different room ID. Expected: %s, Got: %s", *d.roomID, newEvent.RoomID)

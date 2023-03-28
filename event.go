@@ -48,6 +48,7 @@ func IsPowerEvent(event *Event) bool {
 				content.Membership == "invite" ||
 				(content.Membership == "join" && content.JoinAuthorisedViaUsersServer != nil) ||
 				// TODO: Shouldn't we include all "leave" events???
+				// NOTE: The following leaves are "kicks"
 				(content.Membership == "leave" && event.Sender != *event.StateKey) {
 				memberIsPower = true
 			}
